@@ -274,3 +274,32 @@ export function truncateLine(
 	}
 	return { text: `${line.slice(0, maxChars)}... [truncated]`, wasTruncated: true };
 }
+
+/**
+ * Model-facing tail truncation for command/tool output (e.g. bash).
+ *
+ * Keeps the actionable tail of long output (errors and final results live at
+ * the end) and, when truncation occurs, prepends a deterministic banner so the
+ * model knows how many lines were dropped above. Small output is returned
+ * unchanged.
+ *
+ * The banner uses a stable `--- Truncated N lines above this point ---` format
+ * so it is easy to detect and reason about.
+ */
+export function truncateTailForModel(
+	content: string,
+	options: TruncationOptions = {},
+): {
+	text: string;
+	truncation: TruncationResult;
+} {
+	const truncation = truncateTail(content, options);
+	if (!truncation.truncated) {
+		return { text: content, truncation };
+	}
+	const droppedAbove = Math.max(0, truncation.totalLines - truncation.outputLines);
+	const banner = `--- Truncated ${droppedAbove} lines above this point ---`;
+	const body = truncation.content;
+	const text = body.length > 0 ? `${banner}\n\n${body}` : banner;
+	return { text, truncation };
+}

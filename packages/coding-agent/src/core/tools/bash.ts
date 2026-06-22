@@ -283,6 +283,18 @@ export function createBashToolDefinition(
 		label: "bash",
 		description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.`,
 		promptSnippet: "Execute bash commands (ls, grep, find, etc.)",
+		promptGuidelines: [
+			"Do not use interactive commands; prefer non-interactive equivalents (e.g. add -y/--yes, set DEBIAN_FRONTEND=noninteractive, or use --no-pager).",
+			"Prefer dedicated file/search tools (read, grep, find) over bash for code/file exploration; bash is for builds, tests, git, package scripts, and shell-only work.",
+			"When you do need bash, prefer `rg` / `rg --files` over `grep`/`find`. They respect .gitignore and are much faster.",
+			"Scope recursive searches: pass an explicit `path` argument and exclude heavy dirs (node_modules, .git, dist, build, target, .next, .venv).",
+			"Do not pipe cat/head/tail into grep/find/wc; pass file paths directly so output stays bounded and tools can stream them.",
+			"Quote file paths containing spaces, glob characters, or shell metacharacters.",
+			"Set a timeout (in seconds) for any command that could hang (network calls, watchers, long builds).",
+			"Only commit, push, or change git history when the user explicitly asks. Stage explicit paths; never `git add -A`.",
+			"Never run destructive commands (`git reset --hard`, `git clean -fd`, broad `rm -rf`, force push) unless the user explicitly asks.",
+			"Keep commands simple. Avoid unnecessary `cd dir && cmd` chaining; prefer the tool's cwd/path options when available.",
+		],
 		parameters: bashSchema,
 		async execute(
 			_toolCallId,
@@ -363,14 +375,23 @@ export function createBashToolDefinition(
 					details = { truncation, fullOutputPath: snapshot.fullOutputPath };
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
+					// Deterministic banner first, so the model immediately sees how
+					// much was dropped above the kept tail.
+					const droppedAbove = Math.max(0, truncation.totalLines - truncation.outputLines);
+					const banner = `--- Truncated ${droppedAbove} lines above this point ---`;
+					let footer: string;
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(output.getLastLineBytes());
-						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
+						footer = `[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
 					} else if (truncation.truncatedBy === "lines") {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
+						footer = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						footer = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
 					}
+					// Prepend the banner to the kept tail (the actionable part),
+					// and keep the footer with the full-output path reference.
+					const body = snapshot.content;
+					text = body.length > 0 ? `${banner}\n\n${body}\n\n${footer}` : `${banner}\n\n${footer}`;
 				}
 				return { text, details };
 			};

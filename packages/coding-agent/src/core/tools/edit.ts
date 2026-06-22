@@ -297,10 +297,15 @@ export function createEditToolDefinition(
 		promptSnippet:
 			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
 		promptGuidelines: [
-			"Use edit for precise changes (edits[].oldText must match exactly)",
-			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls",
+			"Read the file (or the relevant region) before editing so oldText matches exactly.",
+			"Use edit for precise changes; use write only for new files or full rewrites.",
+			"Each edits[].oldText must match the original file exactly. Do not include leading/trailing whitespace you did not see; preserve the file's indentation and line endings.",
+			"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions just to connect distant changes.",
+			"For repeated/near-identical blocks (e.g. several list items, similar JSX nodes), include enough unique surrounding lines to disambiguate which occurrence you mean.",
+			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls.",
 			"Each edits[].oldText is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
-			"Keep edits[].oldText as small as possible while still being unique in the file. Do not pad with large unchanged regions.",
+			"If an edit fails, re-read the relevant region before retrying. Do not retry identical arguments blindly.",
+			"After every edit, re-read the changed region (or the full file if small) and confirm the change landed as intended.",
 		],
 		parameters: editSchema,
 		renderShell: "self",

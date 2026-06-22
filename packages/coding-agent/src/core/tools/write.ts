@@ -189,7 +189,12 @@ export function createWriteToolDefinition(
 		description:
 			"Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
 		promptSnippet: "Create or overwrite files",
-		promptGuidelines: ["Use write only for new files or complete rewrites."],
+		promptGuidelines: [
+			"Use write only for new files or for a complete replacement of an existing file's contents.",
+			"For surgical changes to an existing file, prefer edit. Avoid overwriting existing files unless you intend to replace nearly all of their content.",
+			"For ad-hoc scripts or scratch files, write them under /tmp and clean them up when done unless the user asks otherwise.",
+			"After every write, re-read the file and confirm the content landed as intended.",
+		],
 		parameters: writeSchema,
 		async execute(
 			_toolCallId,
