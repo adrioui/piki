@@ -54,6 +54,16 @@ export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
 }
 
+export interface SubagentSettings {
+	enabled?: boolean; // default: false
+	finderModelProvider?: string;
+	finderModelId?: string;
+}
+
+export interface ExperimentalSettings {
+	autoSnapshot?: boolean; // default: false
+}
+
 export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
@@ -115,6 +125,8 @@ export interface Settings {
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
+	experimental?: ExperimentalSettings;
+	subagents?: SubagentSettings;
 	warnings?: WarningSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
@@ -1181,6 +1193,20 @@ export class SettingsManager {
 
 	getCodeBlockIndent(): string {
 		return this.settings.markdown?.codeBlockIndent ?? "  ";
+	}
+
+	getExperimentalSettings(): ExperimentalSettings {
+		return {
+			autoSnapshot: this.settings.experimental?.autoSnapshot ?? false,
+		};
+	}
+
+	getSubagentSettings(): SubagentSettings {
+		return {
+			enabled: this.settings.subagents?.enabled ?? false,
+			finderModelProvider: this.settings.subagents?.finderModelProvider,
+			finderModelId: this.settings.subagents?.finderModelId,
+		};
 	}
 
 	getWarnings(): WarningSettings {

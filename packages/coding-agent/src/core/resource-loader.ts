@@ -8,6 +8,7 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
+import { expandAtFileIncludes } from "./context-includes.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
 	clearExtensionCache,
@@ -44,6 +45,13 @@ export interface ResourceLoader {
 	getAppendSystemPrompt(): string[];
 	extendResources(paths: ResourceExtensionPaths): void;
 	reload(options?: ResourceLoaderReloadOptions): Promise<void>;
+	/**
+	 * Re-discover only project context files (AGENTS.md / CLAUDE.md) from the
+	 * cwd up to the workspace root, without re-resolving extensions, skills, or
+	 * themes. Returns whether the discovered set changed. Cheap and safe to call
+	 * after file operations that may have created/edited an AGENTS.md.
+	 */
+	reloadContextFiles(): boolean;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -118,7 +126,38 @@ export function loadProjectContextFiles(options: {
 
 	contextFiles.push(...ancestorContextFiles);
 
-	return contextFiles;
+	// Expand @file includes in each context file so referenced docs are inlined
+	// into the project context. Cycles, duplicates, code blocks, and size are
+	// all bounded by expandAtFileIncludes.
+	return contextFiles.map((file) => {
+		try {
+			const expanded = expandAtFileIncludes(file.content, file.path);
+			return { path: file.path, content: expanded.content };
+		} catch {
+			// If expansion fails for any reason, keep the original content.
+			return file;
+		}
+	});
+}
+
+/**
+ * Compare two project-context-file lists for equality by canonical path and
+ * content. Used to decide whether a context-file re-discovery actually changed
+ * anything worth rebuilding the system prompt for.
+ */
+function contextFilesEqual(
+	a: Array<{ path: string; content: string }>,
+	b: Array<{ path: string; content: string }>,
+): boolean {
+	if (a.length !== b.length) {
+		return false;
+	}
+	for (let i = 0; i < a.length; i++) {
+		if (a[i].path !== b[i].path || a[i].content !== b[i].content) {
+			return false;
+		}
+	}
+	return true;
 }
 
 export interface DefaultResourceLoaderOptions {
@@ -487,6 +526,20 @@ export class DefaultResourceLoader implements ResourceLoader {
 			? this.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
 		this.loaded = true;
+	}
+
+	reloadContextFiles(): boolean {
+		if (this.noContextFiles) {
+			return false;
+		}
+		const agentsFiles = {
+			agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }),
+		};
+		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
+		const next = resolvedAgentsFiles.agentsFiles;
+		const changed = !contextFilesEqual(this.agentsFiles, next);
+		this.agentsFiles = next;
+		return changed;
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {

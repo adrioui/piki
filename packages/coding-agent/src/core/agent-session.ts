@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import type {
@@ -37,6 +38,7 @@ import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
+import { formatToolResultForModel } from "./activity-formatter.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
@@ -51,6 +53,7 @@ import {
 	shouldCompact,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { ErrorRepeatGuard } from "./error-repeat-guard.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
@@ -82,17 +85,25 @@ import {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
+import { classifyPromptProfile } from "./prompt-family.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import { loadReviewChecks } from "./review-checks.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
+import { createSnapshot, isGitRepo } from "./snapshot.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
+import { createCodeReviewToolDefinition } from "./tools/code-review.ts";
+import { createFindFilesToolDefinition } from "./tools/find-files.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
-import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
+import { createOracleToolDefinition } from "./tools/oracle.ts";
+import { createRestoreSnapshotToolDefinition } from "./tools/restore-snapshot.ts";
+import { createTaskToolDefinition } from "./tools/task.ts";
+import { createToolDefinitionFromAgentTool, wrapToolDefinition } from "./tools/tool-definition-wrapper.ts";
 
 // ============================================================================
 // Skill Block Parsing
@@ -291,6 +302,7 @@ export class AgentSession {
 	// Retry state
 	private _retryAbortController: AbortController | undefined = undefined;
 	private _retryAttempt = 0;
+	private _errorRepeatGuard = new ErrorRepeatGuard();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
@@ -330,6 +342,10 @@ export class AgentSession {
 	// Base system prompt (without extension appends) - used to apply fresh appends each turn
 	private _baseSystemPrompt = "";
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
+
+	// Auto-snapshot state
+	private _snapshotMap: Map<string, string> = new Map();
+	private _snapshotEnabled = false;
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -419,12 +435,22 @@ export class AgentSession {
 			}
 
 			try {
-				return await runner.emitToolCall({
+				const toolCallResult = await runner.emitToolCall({
 					type: "tool_call",
 					toolName: toolCall.name,
 					toolCallId: toolCall.id,
 					input: args as Record<string, unknown>,
 				});
+
+				// Handle middleware synthesize result: return immediate result to bypass execution
+				if (toolCallResult?.synthesizeResult) {
+					return {
+						immediateResult: toolCallResult.synthesizeResult,
+						immediateResultIsError: toolCallResult.synthesizeIsError,
+					};
+				}
+
+				return toolCallResult;
 			} catch (err) {
 				if (err instanceof Error) {
 					throw err;
@@ -434,9 +460,46 @@ export class AgentSession {
 		};
 
 		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
+			// Dynamic project-instruction discovery: after a successful edit/write,
+			// re-scan for AGENTS.md / CLAUDE.md from cwd up to root. The scan dedupes
+			// and is local/deterministic. If the discovered set changed, rebuild the
+			// base system prompt so the next turn sees the new instructions. This is
+			// independent of extension tool_result handlers below.
+			if (!isError && (toolCall.name === "edit" || toolCall.name === "write")) {
+				this._maybeReloadContextFiles();
+			}
+
+			const repeatGuardResult =
+				isError && result.content.some((content) => content.type === "text")
+					? this._errorRepeatGuard.recordError(
+							toolCall.name,
+							args,
+							result.content
+								.filter((content) => content.type === "text")
+								.map((content) => content.text ?? "")
+								.join("\n"),
+						)
+					: undefined;
+			if (repeatGuardResult?.shouldStop) {
+				return {
+					content: [
+						{
+							type: "text",
+							text:
+								`[${toolCall.name}] The same tool call has failed ${repeatGuardResult.repeatCount} times with the same error.\n` +
+								"Stop retrying the identical call. Change approach, inspect related context, or ask the user if blocked.",
+						},
+					],
+					isError: true,
+					terminate: true,
+				};
+			}
+
+			const formattedContent = formatToolResultForModel(toolCall.name, args, result, isError);
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
-				return undefined;
+				return formattedContent ? { content: formattedContent } : undefined;
 			}
 
 			const hookResult = await runner.emitToolResult({
@@ -444,17 +507,28 @@ export class AgentSession {
 				toolName: toolCall.name,
 				toolCallId: toolCall.id,
 				input: args as Record<string, unknown>,
-				content: result.content,
+				content: formattedContent ?? result.content,
 				details: result.details,
 				isError,
 			});
 
 			if (!hookResult) {
-				return undefined;
+				return formattedContent ? { content: formattedContent } : undefined;
 			}
 
+			const hookResultContent = formattedContent
+				? (formatToolResultForModel(
+						toolCall.name,
+						args,
+						{ content: hookResult.content ?? formattedContent, details: hookResult.details },
+						hookResult.isError ?? isError,
+					) ??
+					hookResult.content ??
+					formattedContent)
+				: (hookResult.content ?? result.content);
+
 			return {
-				content: hookResult.content,
+				content: hookResultContent,
 				details: hookResult.details,
 				isError: hookResult.isError ?? isError,
 			};
@@ -936,8 +1010,40 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
+			promptProfile: classifyPromptProfile(this.model?.provider, this.model?.id, this.model?.name),
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
+	}
+
+	/**
+	 * Rebuild the base system prompt after a model change, but only when the
+	 * prompt profile actually differs. This keeps default-prompt models from
+	 * churning the prompt on every switch while ensuring a switch into or out
+	 * of an open-source-explicit lineage re-renders correctly.
+	 */
+	private _rebuildBaseSystemPromptFromModel(): void {
+		const previousProfile = this._baseSystemPromptOptions.promptProfile;
+		const nextProfile = classifyPromptProfile(this.model?.provider, this.model?.id, this.model?.name);
+		if (previousProfile === nextProfile) {
+			return;
+		}
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
+	}
+
+	/**
+	 * Re-discover project context files (AGENTS.md / CLAUDE.md) after a file
+	 * operation. If the discovered set changed, rebuild the base system prompt so
+	 * the next agent turn observes the new instructions. No-op when nothing
+	 * changed, keeping this cheap for the common case of editing a non-context
+	 * file.
+	 */
+	private _maybeReloadContextFiles(): void {
+		if (!this._resourceLoader.reloadContextFiles()) {
+			return;
+		}
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
 	}
 
 	// =========================================================================
@@ -1144,6 +1250,17 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
+
+		// Auto-snapshot: capture git tree state before the agent turn
+		const experimental = this.settingsManager.getExperimentalSettings();
+		if (experimental.autoSnapshot && isGitRepo(this._cwd)) {
+			const messageId = randomUUID();
+			const treeOID = createSnapshot(this._cwd, this.sessionId, messageId);
+			if (treeOID) {
+				this._snapshotMap.set(messageId, treeOID);
+			}
+		}
+
 		await this._runAgentPrompt(messages);
 	}
 
@@ -1437,6 +1554,10 @@ export class AgentSession {
 		source: "set" | "cycle" | "restore",
 	): Promise<void> {
 		if (modelsAreEqual(previousModel, nextModel)) return;
+		// The prompt profile is derived from the active model's lineage, so a
+		// model switch can change which prompt style renders. Rebuild the base
+		// system prompt from the now-current model before the next turn.
+		this._rebuildBaseSystemPromptFromModel();
 		await this._extensionRunner.emit({
 			type: "model_select",
 			model: nextModel,
@@ -2179,6 +2300,10 @@ export class AgentSession {
 		}
 
 		this.agent.state.model = refreshedModel;
+		// A refresh keeps provider+id, so the lineage/profile cannot change; the
+		// rebuild helper no-ops in that case. Kept for safety and symmetry with
+		// setModel/cycleModel.
+		this._rebuildBaseSystemPromptFromModel();
 	}
 
 	private _bindExtensionCore(runner: ExtensionRunner): void {
@@ -2330,6 +2455,19 @@ export class AgentSession {
 			});
 		}
 		this._toolDefinitions = definitionRegistry;
+
+		// Register restore_snapshot tool when auto-snapshot is enabled
+		const experimental = this.settingsManager?.getExperimentalSettings();
+		this._snapshotEnabled = experimental?.autoSnapshot ?? false;
+		if (this._snapshotEnabled && isAllowedTool("restore_snapshot")) {
+			const snapshotToolDef = createRestoreSnapshotToolDefinition(this._cwd);
+			const snapshotToolEntry: ToolDefinitionEntry = {
+				definition: snapshotToolDef,
+				sourceInfo: createSyntheticSourceInfo("<builtin:restore_snapshot>", { source: "builtin" }),
+			};
+			this._toolDefinitions.set("restore_snapshot", snapshotToolEntry);
+		}
+
 		this._toolPromptSnippets = new Map(
 			Array.from(definitionRegistry.values())
 				.map(({ definition }) => {
@@ -2362,11 +2500,124 @@ export class AgentSession {
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
 			toolRegistry.set(tool.name, tool);
 		}
+
+		// Register restore_snapshot agent tool when auto-snapshot is enabled
+		if (this._snapshotEnabled && isAllowedTool("restore_snapshot")) {
+			const snapshotEntry = this._toolDefinitions.get("restore_snapshot");
+			if (snapshotEntry) {
+				const wrappedSnapshotTool = wrapToolDefinition(snapshotEntry.definition, () => runner.createContext());
+				toolRegistry.set("restore_snapshot", wrappedSnapshotTool);
+			}
+		}
+
+		// Register find_files / oracle / task subagent tools when subagents are enabled
+		const subagentSettings = this.settingsManager?.getSubagentSettings();
+		const subagentsEnabled = subagentSettings?.enabled ?? false;
+		if (subagentsEnabled) {
+			// Build SubagentTool adapters from the base built-in tools the main
+			// agent has. These reuse the already-registered tool definitions so the
+			// subagents run against the same implementations (and overrides).
+			const toSubagentTool = (tool: AgentTool) => ({
+				name: tool.name,
+				parameters: tool.parameters,
+				execute: (id: string, args: unknown, signal: AbortSignal | undefined) =>
+					tool.execute(id, args, signal, undefined),
+			});
+			const baseTools = Array.from(toolRegistry.values());
+			const readOnlySubagentTools = baseTools
+				.filter((t) => ["grep", "find", "read", "ls", "bash"].includes(t.name))
+				.map(toSubagentTool);
+			// The task subagent may delegate the full productive surface. Each tool's
+			// availability is still re-checked per call via delegatableToolNames.
+			const delegatableTaskTools = baseTools
+				.filter((t) => ["read", "grep", "find", "ls", "bash", "edit", "write"].includes(t.name))
+				.map(toSubagentTool);
+
+			const registerSubagentTool = (name: string, definition: ToolDefinition): void => {
+				if (!isAllowedTool(name)) return;
+				this._toolDefinitions.set(name, {
+					definition,
+					sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
+				});
+				const wrapped = wrapToolDefinition(definition, () => runner.createContext());
+				toolRegistry.set(name, wrapped);
+			};
+
+			if (isAllowedTool("find_files")) {
+				registerSubagentTool(
+					"find_files",
+					createFindFilesToolDefinition({
+						cwd: this._cwd,
+						model: () => this.model,
+						tools: readOnlySubagentTools,
+					}),
+				);
+			}
+
+			if (isAllowedTool("oracle")) {
+				registerSubagentTool(
+					"oracle",
+					createOracleToolDefinition({
+						cwd: this._cwd,
+						model: () => this.model,
+						tools: readOnlySubagentTools,
+					}),
+				);
+			}
+
+			if (isAllowedTool("task")) {
+				registerSubagentTool(
+					"task",
+					createTaskToolDefinition({
+						cwd: this._cwd,
+						model: () => this.model,
+						tools: delegatableTaskTools,
+						delegatableToolNames: delegatableTaskTools.map((t) => t.name),
+					}),
+				);
+			}
+
+			// code_review runs only when there are discovered checks. It uses
+			// read-only subagent tools (each check may declare more, but the
+			// baseline is read-only and never edit/write).
+			if (isAllowedTool("code_review")) {
+				const reviewChecksResult = loadReviewChecks({ cwd: this._cwd });
+				if (reviewChecksResult.checks.length > 0) {
+					registerSubagentTool(
+						"code_review",
+						createCodeReviewToolDefinition({
+							cwd: this._cwd,
+							model: () => this.model,
+							tools: readOnlySubagentTools,
+							checks: reviewChecksResult.checks,
+							delegatableToolNames: readOnlySubagentTools.map((t) => t.name),
+						}),
+					);
+				}
+			}
+		}
+
 		this._toolRegistry = toolRegistry;
 
 		const nextActiveToolNames = (
 			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
 		).filter((name) => isAllowedTool(name));
+
+		if (
+			this._snapshotEnabled &&
+			isAllowedTool("restore_snapshot") &&
+			!nextActiveToolNames.includes("restore_snapshot")
+		) {
+			nextActiveToolNames.push("restore_snapshot");
+		}
+
+		if (subagentsEnabled) {
+			for (const name of ["find_files", "oracle", "task", "code_review"]) {
+				if (isAllowedTool(name) && !nextActiveToolNames.includes(name)) {
+					nextActiveToolNames.push(name);
+				}
+			}
+		}
 
 		if (allowedToolNames) {
 			for (const toolName of this._toolRegistry.keys()) {
