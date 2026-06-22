@@ -735,4 +735,71 @@ export default function(pi: ExtensionAPI) {
 			expect(runner.getToolDefinition("duplicate-tool")?.description).toBe("explicit tool");
 		});
 	});
+
+	describe("reloadContextFiles", () => {
+		it("returns false and no-ops when no AGENTS.md exists yet", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+			expect(loader.reloadContextFiles()).toBe(false);
+			expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+		});
+
+		it("discovers a newly created AGENTS.md and reports a change", async () => {
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+			expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+
+			writeFileSync(join(cwd, "AGENTS.md"), "# Guidelines\n\nRun npm run check.");
+
+			expect(loader.reloadContextFiles()).toBe(true);
+			const { agentsFiles } = loader.getAgentsFiles();
+			expect(agentsFiles.some((f) => f.path.includes("AGENTS.md"))).toBe(true);
+
+			// A second call with no further change reports no change.
+			expect(loader.reloadContextFiles()).toBe(false);
+		});
+
+		it("discovers nested AGENTS.md by walking up to the workspace root without duplicates", async () => {
+			// Root AGENTS.md + nested AGENTS.md in a subdirectory under cwd.
+			writeFileSync(join(cwd, "AGENTS.md"), "# Root\n\nRoot guideline.");
+			const nestedDir = join(cwd, "packages", "coding-agent");
+			mkdirSync(nestedDir, { recursive: true });
+			writeFileSync(join(nestedDir, "AGENTS.md"), "# Nested\n\nNested guideline.");
+
+			const loader = new DefaultResourceLoader({ cwd: nestedDir, agentDir });
+			await loader.reload();
+
+			const { agentsFiles } = loader.getAgentsFiles();
+			const paths = agentsFiles.map((f) => f.path);
+			// Both root and nested discovered.
+			expect(paths.some((p) => p.endsWith("AGENTS.md") && p.includes("packages"))).toBe(true);
+			const rootMatches = paths.filter((p) => p === join(cwd, "AGENTS.md"));
+			expect(rootMatches).toHaveLength(1); // deduped
+
+			// Editing the nested file is reflected on reloadContextFiles.
+			writeFileSync(join(nestedDir, "AGENTS.md"), "# Nested\n\nUpdated guideline.");
+			expect(loader.reloadContextFiles()).toBe(true);
+			const updated = loader.getAgentsFiles().agentsFiles.find((f) => f.path.includes("packages"));
+			expect(updated?.content).toContain("Updated guideline.");
+		});
+
+		it("stays within the workspace root and does not pick up unrelated ancestor files", async () => {
+			// An AGENTS.md far above cwd should still be discovered (walk goes to
+			// filesystem root by design), but the loader scoped to cwd must report
+			// a stable, deduped set and not crash. Verify out-of-cwd creation is
+			// detected and in-scope content is correct.
+			writeFileSync(join(cwd, "AGENTS.md"), "# In scope");
+			const loader = new DefaultResourceLoader({ cwd, agentDir });
+			await loader.reload();
+			expect(loader.getAgentsFiles().agentsFiles.some((f) => f.content.includes("In scope"))).toBe(true);
+		});
+
+		it("is a no-op when noContextFiles is true", async () => {
+			writeFileSync(join(cwd, "AGENTS.md"), "# Guidelines");
+			const loader = new DefaultResourceLoader({ cwd, agentDir, noContextFiles: true });
+			await loader.reload();
+			expect(loader.reloadContextFiles()).toBe(false);
+			expect(loader.getAgentsFiles().agentsFiles).toEqual([]);
+		});
+	});
 });

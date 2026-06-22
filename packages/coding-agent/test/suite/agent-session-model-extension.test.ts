@@ -181,6 +181,86 @@ describe("AgentSession model and extension characterization", () => {
 		).toBeDefined();
 	});
 
+	it("keeps activity formatting when extension tool_result handlers replace bash content", async () => {
+		const bashTool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "Run a command",
+			parameters: Type.Object({ command: Type.String() }),
+			execute: async () => {
+				return { content: [{ type: "text", text: "raw output" }], details: undefined };
+			},
+		};
+		const harness = await createHarness({
+			tools: [bashTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("tool_result", async () => ({
+						content: [{ type: "text", text: "extension output" }],
+					}));
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo hi" })], { stopReason: "toolUse" }),
+			(context) => {
+				const toolResult = context.messages.find((message) => message.role === "toolResult");
+				const text =
+					toolResult?.role === "toolResult"
+						? toolResult.content
+								.filter((part): part is { type: "text"; text: string } => part.type === "text")
+								.map((part) => part.text)
+								.join("\n")
+						: "";
+				return fauxAssistantMessage(text);
+			},
+		]);
+
+		await harness.session.prompt("hi");
+
+		expect(getAssistantTexts(harness)).toContain("[bash] $ echo hi\nextension output");
+	});
+
+	it("keeps activity formatting when extension tool_result handlers observe without modifying", async () => {
+		const bashTool: AgentTool = {
+			name: "bash",
+			label: "Bash",
+			description: "Run a command",
+			parameters: Type.Object({ command: Type.String() }),
+			execute: async () => {
+				return { content: [{ type: "text", text: "ok" }], details: undefined };
+			},
+		};
+		const harness = await createHarness({
+			tools: [bashTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("tool_result", async () => undefined);
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("bash", { command: "echo ok" })], { stopReason: "toolUse" }),
+			(context) => {
+				const toolResult = context.messages.find((message) => message.role === "toolResult");
+				const text =
+					toolResult?.role === "toolResult"
+						? toolResult.content
+								.filter((part): part is { type: "text"; text: string } => part.type === "text")
+								.map((part) => part.text)
+								.join("\n")
+						: "";
+				return fauxAssistantMessage(text);
+			},
+		]);
+
+		await harness.session.prompt("hi");
+
+		expect(getAssistantTexts(harness)).toContain("[bash] $ echo ok\nok");
+	});
+
 	it("allows extension context handlers to modify messages before the LLM call", async () => {
 		const harness = await createHarness({
 			extensionFactories: [

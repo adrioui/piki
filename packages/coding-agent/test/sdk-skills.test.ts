@@ -61,6 +61,7 @@ This is a test skill.
 			getAppendSystemPrompt: () => [],
 			extendResources: () => {},
 			reload: async () => {},
+			reloadContextFiles: () => false,
 		};
 
 		const { session } = await createAgentSession({
@@ -94,6 +95,7 @@ This is a test skill.
 			getAppendSystemPrompt: () => [],
 			extendResources: () => {},
 			reload: async () => {},
+			reloadContextFiles: () => false,
 		};
 
 		const { session } = await createAgentSession({
