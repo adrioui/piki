@@ -34,6 +34,8 @@ export type ModelLineage =
 	| "deepseek"
 	| "gemma"
 	| "gpt-oss"
+	| "grok"
+	| "mimo"
 	| "unknown";
 
 /** Which system-prompt style to render. */
@@ -57,6 +59,7 @@ const OPEN_SOURCE_EXPLICIT_LINEAGES: ReadonlySet<ModelLineage> = new Set<ModelLi
 	"gemma",
 	"gpt-oss",
 	"kimi",
+	"mimo",
 ]);
 
 /**
@@ -70,15 +73,9 @@ const OPEN_SOURCE_EXPLICIT_LINEAGES: ReadonlySet<ModelLineage> = new Set<ModelLi
  * openrouter, together) from being misclassified by their provider name.
  */
 const LINEAGE_FRAGMENTS: ReadonlyArray<{ fragment: string; lineage: ModelLineage }> = [
-	// glm must be checked before any generic "gpt"/"ai" fragments would catch it.
 	{ fragment: "glm-", lineage: "glm" },
 	{ fragment: "glm/", lineage: "glm" },
-	// gpt-oss is open-source; closed GPT ids (gpt-4o, gpt-5.4) are matched only
-	// via the openai provider fallback, not as a fragment, so this stays safe.
 	{ fragment: "gpt-oss", lineage: "gpt-oss" },
-	// Closed-weight lineages: matched by id fragment so that providers hosting
-	// many lineages (e.g. amazon-bedrock) still classify Claude/Gemini correctly
-	// instead of falling through to "unknown".
 	{ fragment: "claude", lineage: "claude" },
 	{ fragment: "gemini", lineage: "gemini" },
 	{ fragment: "qwen", lineage: "qwen" },
@@ -90,6 +87,8 @@ const LINEAGE_FRAGMENTS: ReadonlyArray<{ fragment: string; lineage: ModelLineage
 	{ fragment: "deepseek", lineage: "deepseek" },
 	{ fragment: "gemma", lineage: "gemma" },
 	{ fragment: "kimi", lineage: "kimi" },
+	{ fragment: "grok", lineage: "grok" },
+	{ fragment: "mimo", lineage: "mimo" },
 ];
 
 /**
@@ -110,7 +109,68 @@ const PROVIDER_LINEAGE_FALLBACK: ReadonlyMap<string, ModelLineage> = new Map<str
 	["moonshotai", "kimi"],
 	["moonshotai-cn", "kimi"],
 	["kimi-coding", "kimi"],
+	["xai", "grok"],
 ]);
+
+/**
+ * Model-aware prompt variant. Inspired by Amp's cj5() → pj5() → *K4() routing.
+ *
+ * Unlike PromptProfile (which is a binary open-source vs default split),
+ * PromptVariant provides fine-grained per-model-family prompt instructions
+ * that address each model's specific strengths and weaknesses.
+ *
+ * - default: Claude-family — assume strong instruction following
+ * - open-source-explicit: open-weight models that need structured instructions
+ * - kimi-explicit: Kimi K2.x — speed/efficiency oriented, strong parallelization
+ * - grok-explicit: xAI/Grok — allows special agent persona
+ * - openai-explicit: GPT-family — imperative guardrails, verification gates
+ * - gemini-explicit: Gemini — benefits from few-shot examples
+ */
+export type PromptVariant =
+	| "default"
+	| "open-source-explicit"
+	| "kimi-explicit"
+	| "grok-explicit"
+	| "openai-explicit"
+	| "gemini-explicit";
+
+/**
+ * Resolve the prompt variant for a lineage. Maps each lineage to its optimal
+ * prompt variant, combining both the open-source explicit concern and the
+ * model-family-specific concern.
+ */
+export function resolvePromptVariant(lineage: ModelLineage | undefined): PromptVariant {
+	switch (lineage) {
+		case "kimi":
+			return "kimi-explicit";
+		case "grok":
+			return "grok-explicit";
+		case "openai":
+			return "openai-explicit";
+		case "gemini":
+			return "gemini-explicit";
+		default:
+			// Open-source lineages get the explicit prompt
+			if (lineage && OPEN_SOURCE_EXPLICIT_LINEAGES.has(lineage)) {
+				return "open-source-explicit";
+			}
+			return "default";
+	}
+}
+
+/** Convenience: classify lineage then resolve its prompt variant. */
+export function classifyPromptVariant(
+	provider: string | undefined,
+	modelId: string | undefined,
+	modelName: string | undefined,
+): PromptVariant {
+	return resolvePromptVariant(classifyModelLineage(provider, modelId, modelName));
+}
+
+/** Whether the variant is an open-source explicit style. */
+export function isOpenSourceExplicitVariant(variant: PromptVariant | undefined): boolean {
+	return variant === "open-source-explicit";
+}
 
 /**
  * Classify a model's lineage. Classification is structural (provider id +

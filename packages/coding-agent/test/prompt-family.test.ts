@@ -2,9 +2,12 @@ import { describe, expect, test } from "vitest";
 import {
 	classifyModelLineage,
 	classifyPromptProfile,
+	classifyPromptVariant,
 	isOpenSourceExplicitProfile,
+	isOpenSourceExplicitVariant,
 	type ModelLineage,
 	resolvePromptProfile,
+	resolvePromptVariant,
 } from "../src/core/prompt-family.ts";
 
 describe("classifyModelLineage", () => {
@@ -100,7 +103,6 @@ describe("classifyModelLineage", () => {
 		});
 
 		test("non-dedicated providers with unrecognizable ids fall through to unknown", () => {
-			expect(classifyModelLineage("xiaomi", "mimo-v2.5-pro", "MiMo V2.5 Pro")).toBe("unknown");
 			expect(classifyModelLineage("ant-ling", "Ring-2.6-1T", "Ring 2.6")).toBe("unknown");
 			expect(classifyModelLineage("some-unknown-provider", "weird-model", "Weird Model")).toBe("unknown");
 			expect(classifyModelLineage(undefined, undefined, undefined)).toBe("unknown");
@@ -184,7 +186,6 @@ describe("classifyPromptProfile (end-to-end)", () => {
 	});
 
 	test("unknown lineage keeps default", () => {
-		expect(classifyPromptProfile("xiaomi", "mimo-v2.5-pro", "MiMo V2.5 Pro")).toBe("default");
 		expect(classifyPromptProfile(undefined, undefined, undefined)).toBe("default");
 	});
 });
@@ -194,5 +195,82 @@ describe("isOpenSourceExplicitProfile", () => {
 		expect(isOpenSourceExplicitProfile("open-source-explicit")).toBe(true);
 		expect(isOpenSourceExplicitProfile("default")).toBe(false);
 		expect(isOpenSourceExplicitProfile(undefined)).toBe(false);
+	});
+});
+
+describe("resolvePromptVariant", () => {
+	test("kimi lineage routes to kimi-explicit", () => {
+		expect(resolvePromptVariant("kimi")).toBe("kimi-explicit");
+	});
+
+	test("grok lineage routes to grok-explicit", () => {
+		expect(resolvePromptVariant("grok")).toBe("grok-explicit");
+	});
+
+	test("openai lineage routes to openai-explicit", () => {
+		expect(resolvePromptVariant("openai")).toBe("openai-explicit");
+	});
+
+	test("gemini lineage routes to gemini-explicit", () => {
+		expect(resolvePromptVariant("gemini")).toBe("gemini-explicit");
+	});
+
+	test("open-source lineages route to open-source-explicit", () => {
+		for (const lineage of ["glm", "qwen", "llama", "mistral", "deepseek", "gemma", "gpt-oss"] as const) {
+			expect(resolvePromptVariant(lineage)).toBe("open-source-explicit");
+		}
+	});
+
+	test("claude/unknown lineages route to default", () => {
+		expect(resolvePromptVariant("claude")).toBe("default");
+		expect(resolvePromptVariant("unknown")).toBe("default");
+		expect(resolvePromptVariant(undefined)).toBe("default");
+	});
+});
+
+describe("classifyPromptVariant (end-to-end)", () => {
+	test("Kimi K2.x routes to kimi-explicit", () => {
+		expect(classifyPromptVariant("moonshotai", "kimi-k2.6", "Kimi K2.6")).toBe("kimi-explicit");
+		expect(classifyPromptVariant("openrouter", "moonshotai/kimi-k2.6", "Kimi K2.6")).toBe("kimi-explicit");
+	});
+
+	test("xAI/Grok routes to grok-explicit", () => {
+		expect(classifyPromptVariant("xai", "grok-3", "Grok 3")).toBe("grok-explicit");
+	});
+
+	test("OpenAI GPT routes to openai-explicit", () => {
+		expect(classifyPromptVariant("openai", "gpt-5.5", "GPT-5.5")).toBe("openai-explicit");
+		expect(classifyPromptVariant("openai-codex", "gpt-5.5-codex", "GPT-5.5 Codex")).toBe("openai-explicit");
+	});
+
+	test("Google Gemini routes to gemini-explicit", () => {
+		expect(classifyPromptVariant("google", "gemini-3.1-pro", "Gemini 3.1 Pro")).toBe("gemini-explicit");
+		expect(classifyPromptVariant("google-vertex", "gemini-3.1-pro", "Gemini 3.1 Pro")).toBe("gemini-explicit");
+	});
+
+	test("Open-source models route to open-source-explicit", () => {
+		expect(classifyPromptVariant("zai", "glm-5.2", "GLM-5.2")).toBe("open-source-explicit");
+		expect(classifyPromptVariant("ollama", "qwen2.5-coder", "Qwen2.5 Coder")).toBe("open-source-explicit");
+		expect(classifyPromptVariant("lmstudio", "llama-3.1-70b", "Llama 3.1")).toBe("open-source-explicit");
+		expect(classifyPromptVariant("deepseek", "deepseek-v4-pro", "DeepSeek V4 Pro")).toBe("open-source-explicit");
+	});
+
+	test("Claude routes to default", () => {
+		expect(classifyPromptVariant("anthropic", "claude-opus-4-8", "Claude Opus 4.8")).toBe("default");
+		expect(classifyPromptVariant("openrouter", "anthropic/claude-opus-4-8", "Claude Opus 4.8")).toBe("default");
+	});
+
+	test("Unknown models route to default", () => {
+		expect(classifyPromptVariant(undefined, undefined, undefined)).toBe("default");
+	});
+});
+
+describe("isOpenSourceExplicitVariant", () => {
+	test("true only for open-source-explicit", () => {
+		expect(isOpenSourceExplicitVariant("open-source-explicit")).toBe(true);
+		expect(isOpenSourceExplicitVariant("default")).toBe(false);
+		expect(isOpenSourceExplicitVariant("kimi-explicit")).toBe(false);
+		expect(isOpenSourceExplicitVariant("openai-explicit")).toBe(false);
+		expect(isOpenSourceExplicitVariant(undefined)).toBe(false);
 	});
 });
