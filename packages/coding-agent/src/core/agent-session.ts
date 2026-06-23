@@ -85,7 +85,7 @@ import {
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
-import { classifyPromptProfile } from "./prompt-family.ts";
+import { classifyPromptVariant } from "./prompt-family.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { loadReviewChecks } from "./review-checks.ts";
@@ -347,6 +347,9 @@ export class AgentSession {
 	private _snapshotMap: Map<string, string> = new Map();
 	private _snapshotEnabled = false;
 
+	// Guidance discovery state (Phase 2)
+	private _touchedFiles: Set<string> = new Set();
+
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
@@ -467,6 +470,19 @@ export class AgentSession {
 			// independent of extension tool_result handlers below.
 			if (!isError && (toolCall.name === "edit" || toolCall.name === "write")) {
 				this._maybeReloadContextFiles();
+				// Also track the file for glob-scoped guidance filtering
+				const filePath = this._extractFilePathFromArgs(args);
+				if (filePath) {
+					this._trackTouchedFile(filePath);
+				}
+			}
+
+			// Guidance discovery: track files read by the agent for glob-scoped filtering
+			if (!isError && toolCall.name === "read") {
+				const filePath = this._extractFilePathFromArgs(args);
+				if (filePath) {
+					this._trackTouchedFile(filePath);
+				}
 			}
 
 			const repeatGuardResult =
@@ -1010,21 +1026,23 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
-			promptProfile: classifyPromptProfile(this.model?.provider, this.model?.id, this.model?.name),
+			provider: this.model?.provider,
+			modelId: this.model?.id,
+			modelName: this.model?.name,
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
 
 	/**
 	 * Rebuild the base system prompt after a model change, but only when the
-	 * prompt profile actually differs. This keeps default-prompt models from
+	 * prompt variant actually differs. This keeps same-variant models from
 	 * churning the prompt on every switch while ensuring a switch into or out
-	 * of an open-source-explicit lineage re-renders correctly.
+	 * of a model-specific lineage re-renders correctly.
 	 */
 	private _rebuildBaseSystemPromptFromModel(): void {
-		const previousProfile = this._baseSystemPromptOptions.promptProfile;
-		const nextProfile = classifyPromptProfile(this.model?.provider, this.model?.id, this.model?.name);
-		if (previousProfile === nextProfile) {
+		const previousVariant = this._baseSystemPromptOptions.promptVariant;
+		const nextVariant = classifyPromptVariant(this.model?.provider, this.model?.id, this.model?.name);
+		if (previousVariant === nextVariant) {
 			return;
 		}
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
@@ -1042,6 +1060,58 @@ export class AgentSession {
 		if (!this._resourceLoader.reloadContextFiles()) {
 			return;
 		}
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
+	}
+
+	/**
+	 * Extract file path from tool arguments (read, edit, write tools).
+	 * Returns undefined if no file path found.
+	 */
+	private _extractFilePathFromArgs(args: unknown): string | undefined {
+		if (!args || typeof args !== "object") {
+			return undefined;
+		}
+		const record = args as Record<string, unknown>;
+		const path = record.file_path ?? record.path;
+		return typeof path === "string" ? path : undefined;
+	}
+
+	/**
+	 * Track a file that was read by the agent. Used for glob-scoped guidance filtering.
+	 * When a file is read, check if any glob-scoped AGENTS.md files apply to it.
+	 * If new guidance becomes relevant, rebuild the system prompt.
+	 */
+	private _trackTouchedFile(filePath: string): void {
+		const absolutePath = resolvePath(filePath, this._cwd);
+		const wasAdded = !this._touchedFiles.has(absolutePath);
+		this._touchedFiles.add(absolutePath);
+
+		if (wasAdded) {
+			// Check if any glob-scoped guidance now applies to this file
+			this._maybeReloadGuidanceForTouchedFiles();
+		}
+	}
+
+	/**
+	 * Check if glob-scoped guidance files now apply to recently touched files.
+	 * Rebuilds the system prompt if new guidance becomes relevant.
+	 */
+	private _maybeReloadGuidanceForTouchedFiles(): void {
+		const touchedPaths = Array.from(this._touchedFiles);
+		if (touchedPaths.length === 0) {
+			return;
+		}
+
+		// Pass touched files to resource loader for glob-scoped filtering
+		this._resourceLoader.setTouchedFiles(touchedPaths);
+
+		// Reload context files - this will filter AGENTS.md based on glob patterns
+		if (!this._resourceLoader.reloadContextFiles()) {
+			return;
+		}
+
+		// Context files changed, rebuild system prompt
 		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
 		this.agent.state.systemPrompt = this._baseSystemPrompt;
 	}
@@ -2765,7 +2835,7 @@ export class AgentSession {
 			return false;
 		}
 
-		const delayMs = settings.baseDelayMs * 2 ** (this._retryAttempt - 1);
+		const delayMs = Math.min(settings.baseDelayMs * 2 ** (this._retryAttempt - 1), 60000); // 60s cap (Amp-style)
 
 		this._emit({
 			type: "auto_retry_start",

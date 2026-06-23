@@ -62,6 +62,7 @@ This is a test skill.
 			extendResources: () => {},
 			reload: async () => {},
 			reloadContextFiles: () => false,
+			setTouchedFiles: () => {},
 		};
 
 		const { session } = await createAgentSession({
@@ -96,6 +97,7 @@ This is a test skill.
 			extendResources: () => {},
 			reload: async () => {},
 			reloadContextFiles: () => false,
+			setTouchedFiles: () => {},
 		};
 
 		const { session } = await createAgentSession({

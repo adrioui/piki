@@ -182,6 +182,7 @@ function createMinimalResourceLoader(systemPrompt: string): ResourceLoader {
 		extendResources: () => {},
 		reload: async () => {},
 		reloadContextFiles: () => false,
+		setTouchedFiles: () => {},
 	};
 }
 

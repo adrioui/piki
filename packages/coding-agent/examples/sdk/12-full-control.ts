@@ -49,6 +49,7 @@ Available: read, bash. Be concise.`,
 	extendResources: () => {},
 	reload: async () => {},
 	reloadContextFiles: () => false,
+	setTouchedFiles: () => {},
 };
 
 const { session } = await createAgentSession({

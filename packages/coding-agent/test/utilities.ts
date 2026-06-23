@@ -225,6 +225,7 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		extendResources: () => {},
 		reload: async () => {},
 		reloadContextFiles: () => false,
+		setTouchedFiles: () => {},
 	};
 }
 

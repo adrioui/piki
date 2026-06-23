@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
@@ -8,7 +8,7 @@ import type { ResourceDiagnostic } from "./diagnostics.ts";
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
 
 import { canonicalizePath, isLocalPath, resolvePath } from "../utils/paths.ts";
-import { expandAtFileIncludes } from "./context-includes.ts";
+import { expandAtFileIncludes, filterGlobScopedDocs, parseGlobScopedDoc } from "./context-includes.ts";
 import { createEventBus, type EventBus } from "./event-bus.ts";
 import {
 	clearExtensionCache,
@@ -52,6 +52,12 @@ export interface ResourceLoader {
 	 * after file operations that may have created/edited an AGENTS.md.
 	 */
 	reloadContextFiles(): boolean;
+	/**
+	 * Set the list of files touched by the agent (read/edited/written).
+	 * Used for glob-scoped guidance filtering. Triggers re-filtering of
+	 * AGENTS.md files to include only guidance relevant to touched files.
+	 */
+	setTouchedFiles(paths: string[]): void;
 }
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
@@ -89,12 +95,65 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 	return null;
 }
 
+function findDescendantContextFiles(rootDir: string, maxDepth: number = 5): Array<{ path: string; content: string }> {
+	const contextFiles: Array<{ path: string; content: string }> = [];
+	const candidates = ["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+	const seenPaths = new Set<string>();
+
+	const walk = (dir: string, depth: number) => {
+		if (depth > maxDepth) return;
+
+		try {
+			const entries = readdirSync(dir, { withFileTypes: true });
+			for (const entry of entries) {
+				if (!entry.isDirectory()) continue;
+
+				// Skip hidden directories and common non-project directories
+				if (
+					entry.name.startsWith(".") ||
+					entry.name === "node_modules" ||
+					entry.name === "dist" ||
+					entry.name === "build"
+				) {
+					continue;
+				}
+
+				const subDir = join(dir, entry.name);
+
+				// Check for context files in this subdirectory
+				for (const filename of candidates) {
+					const filePath = join(subDir, filename);
+					if (existsSync(filePath) && !seenPaths.has(filePath)) {
+						try {
+							const content = readFileSync(filePath, "utf-8");
+							contextFiles.push({ path: filePath, content });
+							seenPaths.add(filePath);
+						} catch (error) {
+							console.error(chalk.yellow(`Warning: Could not read ${filePath}: ${error}`));
+						}
+					}
+				}
+
+				// Recurse into subdirectory
+				walk(subDir, depth + 1);
+			}
+		} catch (_error) {
+			// Ignore errors (permission denied, etc.)
+		}
+	};
+
+	walk(rootDir, 0);
+	return contextFiles;
+}
+
 export function loadProjectContextFiles(options: {
 	cwd: string;
 	agentDir: string;
+	touchedFiles?: string[];
 }): Array<{ path: string; content: string }> {
 	const resolvedCwd = resolvePath(options.cwd);
 	const resolvedAgentDir = resolvePath(options.agentDir);
+	const touchedFiles = options.touchedFiles ?? [];
 
 	const contextFiles: Array<{ path: string; content: string }> = [];
 	const seenPaths = new Set<string>();
@@ -126,10 +185,19 @@ export function loadProjectContextFiles(options: {
 
 	contextFiles.push(...ancestorContextFiles);
 
+	// Phase 2: Discover context files in descendant directories (for glob-scoped guidance)
+	const descendantContextFiles = findDescendantContextFiles(resolvedCwd);
+	for (const contextFile of descendantContextFiles) {
+		if (!seenPaths.has(contextFile.path)) {
+			contextFiles.push(contextFile);
+			seenPaths.add(contextFile.path);
+		}
+	}
+
 	// Expand @file includes in each context file so referenced docs are inlined
 	// into the project context. Cycles, duplicates, code blocks, and size are
 	// all bounded by expandAtFileIncludes.
-	return contextFiles.map((file) => {
+	const expandedFiles = contextFiles.map((file) => {
 		try {
 			const expanded = expandAtFileIncludes(file.content, file.path);
 			return { path: file.path, content: expanded.content };
@@ -138,6 +206,30 @@ export function loadProjectContextFiles(options: {
 			return file;
 		}
 	});
+
+	// Parse each file for glob-scoped directives and filter
+	// Glob patterns are relative to the project root (cwd), not the AGENTS.md location
+	const relativeTouchedFiles = touchedFiles.map((touchedPath) => {
+		const relPath = relative(resolvedCwd, touchedPath);
+		return relPath.startsWith("..") ? touchedPath : relPath;
+	});
+
+	const globScopedDocs = expandedFiles.map((file) => {
+		const doc = parseGlobScopedDoc(file.content, file.path);
+		return { ...doc, relativeTouchedFiles };
+	});
+
+	const filteredDocs = globScopedDocs
+		.map((doc) => {
+			const filtered = filterGlobScopedDocs([doc], doc.relativeTouchedFiles);
+			return filtered[0]; // undefined if filtered out
+		})
+		.filter(Boolean);
+
+	return filteredDocs.map((doc) => ({
+		path: doc.path,
+		content: doc.body,
+	}));
 }
 
 /**
@@ -251,6 +343,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private lastPromptPaths: string[];
 	private lastThemePaths: string[];
 	private loaded: boolean;
+	private touchedFiles: string[] = [];
 
 	constructor(options: DefaultResourceLoaderOptions) {
 		this.cwd = resolvePath(options.cwd);
@@ -505,6 +598,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				: loadProjectContextFiles({
 						cwd: this.cwd,
 						agentDir: this.agentDir,
+						touchedFiles: this.touchedFiles,
 					}),
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
@@ -533,13 +627,21 @@ export class DefaultResourceLoader implements ResourceLoader {
 			return false;
 		}
 		const agentsFiles = {
-			agentsFiles: loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }),
+			agentsFiles: loadProjectContextFiles({
+				cwd: this.cwd,
+				agentDir: this.agentDir,
+				touchedFiles: this.touchedFiles,
+			}),
 		};
 		const resolvedAgentsFiles = this.agentsFilesOverride ? this.agentsFilesOverride(agentsFiles) : agentsFiles;
 		const next = resolvedAgentsFiles.agentsFiles;
 		const changed = !contextFilesEqual(this.agentsFiles, next);
 		this.agentsFiles = next;
 		return changed;
+	}
+
+	setTouchedFiles(paths: string[]): void {
+		this.touchedFiles = paths;
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
