@@ -8,11 +8,16 @@ describe("formatEnvironmentSnapshot", () => {
 			cwd: "/repo/packages/coding-agent",
 			workspaceRoot: "/repo",
 			os: "linux",
+			shell: "bash",
+			timezone: "UTC",
 			hostname: "devhost",
 			username: "devuser",
 			gitBranch: "feature/reliability",
+			gitStatus: ["M src/file.ts"],
+			recentCommits: ["abc1234 initial commit"],
 			repoUrl: "git@example.com:org/repo.git",
-			rootListing: ["package.json", "packages", "README.md"],
+			folderStructure: ["package.json", "packages/", "README.md"],
+			loadedSkills: [],
 		});
 
 		expect(snapshot).toContain("Environment snapshot:");
@@ -24,7 +29,9 @@ describe("formatEnvironmentSnapshot", () => {
 		expect(snapshot).toContain("- username: devuser");
 		expect(snapshot).toContain("- git_branch: feature/reliability");
 		expect(snapshot).toContain("- repo_url: git@example.com:org/repo.git");
-		expect(snapshot).toContain("  - package.json");
+		expect(snapshot).toContain("package.json");
+		expect(snapshot).toContain("packages/");
+		expect(snapshot).toContain("README.md");
 		expect(snapshot).not.toContain("process.env");
 	});
 
@@ -34,16 +41,21 @@ describe("formatEnvironmentSnapshot", () => {
 			cwd: "/repo",
 			workspaceRoot: "/repo",
 			os: "linux",
+			shell: "bash",
+			timezone: "UTC",
 			hostname: "dev\u0000host",
 			username: "devuser",
 			gitBranch: "main",
+			gitStatus: [],
+			recentCommits: [],
 			repoUrl: null,
-			rootListing: Array.from({ length: 25 }, (_, index) => `entry-${index}\u0000`),
+			folderStructure: Array.from({ length: 25 }, (_, index) => `entry-${index}\u0000`),
+			loadedSkills: [],
 		});
 
 		expect(snapshot).toContain("- hostname: devhost");
-		expect(snapshot).toContain("  - entry-0");
-		expect(snapshot).toContain("  - entry-19");
+		expect(snapshot).toContain("entry-0");
+		expect(snapshot).toContain("entry-19");
 		expect(snapshot).not.toContain("entry-20");
 		expect(snapshot).not.toContain("\u0000");
 	});
@@ -54,17 +66,22 @@ describe("formatEnvironmentSnapshot", () => {
 			cwd: "/tmp/no-repo",
 			workspaceRoot: "/tmp/no-repo",
 			os: "linux",
+			shell: null,
+			timezone: null,
 			hostname: null,
 			username: null,
 			gitBranch: null,
+			gitStatus: null,
+			recentCommits: null,
 			repoUrl: null,
-			rootListing: [],
+			folderStructure: [],
+			loadedSkills: null,
 		});
 
 		expect(snapshot).not.toContain("hostname:");
 		expect(snapshot).not.toContain("username:");
 		expect(snapshot).toContain("- git_branch: (unavailable)");
 		expect(snapshot).toContain("- repo_url: (unavailable)");
-		expect(snapshot).toContain("- root_listing: (unavailable)");
+		expect(snapshot).toContain("- folder_structure: (unavailable)");
 	});
 });

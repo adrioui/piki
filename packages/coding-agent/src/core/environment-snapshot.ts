@@ -27,11 +27,16 @@ export interface EnvironmentSnapshot {
 	cwd: string;
 	workspaceRoot: string;
 	os: string;
+	shell: string | null;
+	timezone: string | null;
 	hostname: string | null;
 	username: string | null;
 	gitBranch: string | null;
+	gitStatus: string[] | null;
+	recentCommits: string[] | null;
 	repoUrl: string | null;
-	rootListing: string[];
+	folderStructure: string[];
+	loadedSkills: Array<{ name: string; description: string }> | null;
 }
 
 /**
@@ -43,11 +48,16 @@ export interface EnvironmentSnapshotProvider {
 	readonly date: string;
 	readonly workspaceRoot: string;
 	readonly os: string;
+	readonly shell: string | null;
+	readonly timezone: string | null;
 	readonly hostname: string | null;
 	readonly username: string | null;
 	readonly gitBranch: string | null;
+	readonly gitStatus: readonly string[] | null;
+	readonly recentCommits: readonly string[] | null;
 	readonly repoUrl: string | null;
-	readonly rootListing: readonly string[];
+	readonly folderStructure: readonly string[];
+	readonly loadedSkills: ReadonlyArray<{ name: string; description: string }> | null;
 }
 
 export interface CollectEnvironmentSnapshotOptions {
@@ -61,8 +71,16 @@ export interface CollectEnvironmentSnapshotOptions {
 	username?: string | null;
 	/** Include username/hostname. Default true. */
 	includeUserInfo?: boolean;
-	/** Maximum entries in the root listing. Default 20. */
-	maxRootListingEntries?: number;
+	/** Maximum depth for folder structure traversal. Default 2. */
+	maxFolderDepth?: number;
+	/** Maximum entries per directory in folder structure. Default 20. */
+	maxFolderEntries?: number;
+	/** Maximum git status lines. Default 50. */
+	maxGitStatusLines?: number;
+	/** Maximum recent commits. Default 10. */
+	maxRecentCommits?: number;
+	/** Loaded skills to include in snapshot. */
+	loadedSkills?: Array<{ name: string; description: string }>;
 }
 
 /**
@@ -72,7 +90,10 @@ export function collectEnvironmentSnapshot(options: CollectEnvironmentSnapshotOp
 	const cwd = options.cwd ?? process.cwd();
 	const date = options.date ?? todayIsoDate();
 	const includeUserInfo = options.includeUserInfo ?? true;
-	const maxEntries = options.maxRootListingEntries ?? 20;
+	const maxFolderDepth = options.maxFolderDepth ?? 2;
+	const maxFolderEntries = options.maxFolderEntries ?? 20;
+	const maxGitStatusLines = options.maxGitStatusLines ?? 50;
+	const maxRecentCommits = options.maxRecentCommits ?? 10;
 
 	const hostname = includeUserInfo ? (options.hostname ?? safeHostname()) : null;
 	const username = includeUserInfo ? (options.username ?? safeUsername()) : null;
@@ -83,11 +104,16 @@ export function collectEnvironmentSnapshot(options: CollectEnvironmentSnapshotOp
 		cwd,
 		workspaceRoot,
 		os: platform(),
+		shell: readShell(),
+		timezone: readTimezone(),
 		hostname,
 		username,
 		gitBranch: readGitBranch(cwd),
+		gitStatus: readGitStatus(cwd, maxGitStatusLines),
+		recentCommits: readRecentCommits(cwd, maxRecentCommits),
 		repoUrl: readRepoUrl(cwd),
-		rootListing: readRootListing(workspaceRoot, maxEntries),
+		folderStructure: readFolderStructure(workspaceRoot, maxFolderDepth, maxFolderEntries),
+		loadedSkills: options.loadedSkills ?? null,
 	};
 }
 
@@ -101,16 +127,20 @@ export function formatEnvironmentSnapshot(provider: EnvironmentSnapshotProvider)
 	const username = sanitizeField(provider.username);
 	const gitBranch = sanitizeField(provider.gitBranch);
 	const repoUrl = sanitizeField(provider.repoUrl);
-	const rootListing = provider.rootListing
-		.slice(0, 20)
-		.map((entry) => sanitizeField(entry))
-		.filter((entry): entry is string => Boolean(entry));
+	const shell = sanitizeField(provider.shell);
+	const timezone = sanitizeField(provider.timezone);
 
 	lines.push("Environment snapshot:");
 	lines.push(`- date: ${sanitizeField(provider.date) ?? "(unavailable)"}`);
 	lines.push(`- cwd: ${sanitizeField(provider.cwd) ?? "(unavailable)"}`);
 	lines.push(`- workspace_root: ${sanitizeField(provider.workspaceRoot) ?? "(unavailable)"}`);
 	lines.push(`- os: ${sanitizeField(provider.os) ?? "(unavailable)"}`);
+	if (shell) {
+		lines.push(`- shell: ${shell}`);
+	}
+	if (timezone) {
+		lines.push(`- timezone: ${timezone}`);
+	}
 	if (hostname) {
 		lines.push(`- hostname: ${hostname}`);
 	}
@@ -120,13 +150,38 @@ export function formatEnvironmentSnapshot(provider: EnvironmentSnapshotProvider)
 	lines.push(`- git_branch: ${gitBranch ?? "(unavailable)"}`);
 	lines.push(`- repo_url: ${repoUrl ?? "(unavailable)"}`);
 
-	if (rootListing.length > 0) {
-		lines.push("- root_listing:");
-		for (const entry of rootListing) {
-			lines.push(`  - ${entry}`);
+	if (provider.gitStatus && provider.gitStatus.length > 0) {
+		lines.push("- git_status:");
+		for (const status of provider.gitStatus) {
+			lines.push(`  ${status}`);
+		}
+	}
+
+	if (provider.recentCommits && provider.recentCommits.length > 0) {
+		lines.push("- recent_commits:");
+		for (const commit of provider.recentCommits) {
+			lines.push(`  ${commit}`);
+		}
+	}
+
+	if (provider.folderStructure.length > 0) {
+		lines.push("- folder_structure:");
+		// Limit to 20 entries and sanitize
+		for (const entry of provider.folderStructure.slice(0, 20)) {
+			lines.push(sanitizeField(entry) ?? "");
+		}
+		if (provider.folderStructure.length > 20) {
+			lines.push(`... (${provider.folderStructure.length - 20} more entries)`);
 		}
 	} else {
-		lines.push("- root_listing: (unavailable)");
+		lines.push("- folder_structure: (unavailable)");
+	}
+
+	if (provider.loadedSkills && provider.loadedSkills.length > 0) {
+		lines.push("- loaded_skills:");
+		for (const skill of provider.loadedSkills) {
+			lines.push(`  - ${skill.name}: ${skill.description}`);
+		}
 	}
 
 	return lines.join("\n");
@@ -213,21 +268,110 @@ function readRepoUrl(cwd: string): string | null {
 }
 
 /**
- * Return the first N entries of `cwd`, sorted, without dotfiles, excluding
- * `.git`. Returns empty array on read failure.
+ * Read the current shell from the SHELL environment variable.
  */
-function readRootListing(cwd: string, maxEntries: number): string[] {
-	let entries: string[];
+function readShell(): string | null {
+	const shell = process.env.SHELL;
+	if (!shell) return null;
+	// Extract just the shell name (e.g., /bin/bash -> bash)
+	const shellName = shell.split("/").pop();
+	return sanitizeField(shellName);
+}
+
+/**
+ * Read the current timezone.
+ */
+function readTimezone(): string | null {
 	try {
-		entries = readdirSync(cwd);
+		const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+		return sanitizeField(timezone);
 	} catch {
-		return [];
+		return null;
 	}
-	const filtered = entries
-		.filter((entry) => !entry.startsWith("."))
-		.sort((a, b) => a.localeCompare(b))
-		.slice(0, maxEntries)
-		.map((entry) => sanitizeField(entry))
-		.filter((entry): entry is string => Boolean(entry));
-	return filtered;
+}
+
+/**
+ * Read git status (porcelain format) with line limit.
+ */
+function readGitStatus(cwd: string, maxLines: number): string[] | null {
+	const result = spawnSync("git", ["-C", cwd, "status", "--porcelain"], {
+		encoding: "utf8",
+		timeout: 2000,
+	});
+	if (result.status !== 0) return null;
+
+	const lines = result.stdout.split("\n").filter((line) => line.trim().length > 0);
+	if (lines.length === 0) return null;
+
+	// Limit lines and add truncation marker
+	if (lines.length > maxLines) {
+		return [...lines.slice(0, maxLines), `... (${lines.length - maxLines} more)`];
+	}
+	return lines;
+}
+
+/**
+ * Read recent commits (oneline format) with limit.
+ */
+function readRecentCommits(cwd: string, maxCommits: number): string[] | null {
+	const result = spawnSync("git", ["-C", cwd, "log", "--oneline", `-n${maxCommits}`], {
+		encoding: "utf8",
+		timeout: 2000,
+	});
+	if (result.status !== 0) return null;
+
+	const lines = result.stdout.split("\n").filter((line) => line.trim().length > 0);
+	return lines.length > 0 ? lines : null;
+}
+
+/**
+ * Read folder structure recursively with depth and entry limits.
+ * Returns indented lines showing the tree structure.
+ */
+function readFolderStructure(cwd: string, maxDepth: number, maxEntriesPerDir: number): string[] {
+	const structure: string[] = [];
+
+	function traverse(dir: string, depth: number, prefix: string): void {
+		if (depth > maxDepth) return;
+
+		let entries: string[];
+		try {
+			entries = readdirSync(dir);
+		} catch {
+			return;
+		}
+
+		// Filter out dotfiles and common noise directories
+		const filtered = entries
+			.filter((entry) => !entry.startsWith("."))
+			.filter((entry) => !["node_modules", "dist", "build", "target", "__pycache__"].includes(entry))
+			.sort((a, b) => a.localeCompare(b));
+
+		const limited = filtered.slice(0, maxEntriesPerDir);
+		const omitted = filtered.length - limited.length;
+
+		for (const entry of limited) {
+			const entryPath = join(dir, entry);
+			let isDir = false;
+			try {
+				isDir = statSync(entryPath).isDirectory();
+			} catch {
+				continue;
+			}
+
+			const line = `${prefix}${entry}${isDir ? "/" : ""}`;
+			structure.push(line);
+
+			if (isDir && depth < maxDepth) {
+				traverse(entryPath, depth + 1, `${prefix}  `);
+			}
+		}
+
+		if (omitted > 0) {
+			structure.push(`${prefix}... (${omitted} more)`);
+		}
+	}
+
+	traverse(cwd, 0, "");
+	return structure;
 }
