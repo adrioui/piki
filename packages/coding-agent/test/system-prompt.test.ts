@@ -66,9 +66,8 @@ describe("buildSystemPrompt", () => {
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).toContain(
-				"- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
-			);
+			expect(prompt).toContain("Pi documentation");
+			expect(prompt).toMatch(/README: .+ \| docs: .+ \| examples: .+/);
 		});
 	});
 
@@ -149,7 +148,7 @@ describe("buildSystemPrompt", () => {
 
 		test("default profile keeps the default prompt", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "default",
+				promptVariant: "default",
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
@@ -160,7 +159,7 @@ describe("buildSystemPrompt", () => {
 
 		test("open-source-explicit profile gets the reliability-first explicit prompt", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				toolSnippets: {
 					read: "Read file contents",
 					bash: "Execute bash commands",
@@ -198,7 +197,7 @@ describe("buildSystemPrompt", () => {
 
 		test("open-source-explicit prompt includes condensed pi docs guidance with README/docs/examples paths", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
@@ -213,7 +212,7 @@ describe("buildSystemPrompt", () => {
 
 		test("selected tool snippets still appear in open-source-explicit prompt", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				selectedTools: ["read", "bash"],
 				toolSnippets: {
 					read: "Read file contents",
@@ -230,7 +229,7 @@ describe("buildSystemPrompt", () => {
 
 		test("context files still append in open-source-explicit prompt", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				contextFiles: [{ path: "AGENTS.md", content: "Always run npm run check." }],
 				skills: [],
 				cwd: process.cwd(),
@@ -243,7 +242,7 @@ describe("buildSystemPrompt", () => {
 
 		test("skills still append in open-source-explicit prompt when read tool is available", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				selectedTools: ["read", "bash"],
 				toolSnippets: { read: "Read file contents" },
 				skills: [makeSkill("docx", "Create DOCX documents")],
@@ -255,7 +254,7 @@ describe("buildSystemPrompt", () => {
 
 		test("date and working directory append in open-source-explicit prompt", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				contextFiles: [],
 				skills: [],
 				cwd: "/custom/cwd",
@@ -268,7 +267,7 @@ describe("buildSystemPrompt", () => {
 
 		test("open-source-explicit prompt can append a bounded environment snapshot", () => {
 			const prompt = buildSystemPrompt({
-				promptProfile: "open-source-explicit",
+				promptVariant: "open-source-explicit",
 				contextFiles: [],
 				skills: [],
 				cwd: "/custom/cwd",
@@ -277,11 +276,16 @@ describe("buildSystemPrompt", () => {
 					cwd: "/custom/cwd",
 					workspaceRoot: "/custom",
 					os: "linux",
+					shell: "bash",
+					timezone: "UTC",
 					hostname: "host-a",
 					username: "user-a",
 					gitBranch: "main",
+					gitStatus: [],
+					recentCommits: [],
 					repoUrl: "git@example.com:repo.git",
-					rootListing: ["package.json", "src"],
+					folderStructure: ["package.json", "src/"],
+					loadedSkills: [],
 				},
 			});
 
@@ -294,7 +298,8 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- username: user-a");
 			expect(prompt).toContain("- git_branch: main");
 			expect(prompt).toContain("- repo_url: git@example.com:repo.git");
-			expect(prompt).toContain("  - package.json");
+			expect(prompt).toContain("package.json");
+			expect(prompt).toContain("src/");
 		});
 	});
 });
