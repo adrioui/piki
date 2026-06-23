@@ -1,11 +1,69 @@
 /**
  * Subagent registry - defines reusable subagent specifications.
+ *
+ * Inspired by Amp's R8 specialist registry which assigns each specialist a
+ * fixed model optimized for cost/capability trade-offs. The `model` field
+ * specifies which model to use for this subagent:
+ * - "inherit": use the parent agent's model (default, for coding work)
+ * - "fastest-available": pick from known cheap/fast model IDs if configured
+ *
+ * Amp's pattern:
+ * - Finder → cheapest model (Haiku) for simple file search
+ * - Oracle → mid-tier reasoning model for advisory work
+ * - Task subagent → inherits parent model for actual coding work
  */
 
 export interface SubagentSpec {
 	name: string;
 	systemPrompt: string;
 	allowedTools: string[];
+	/**
+	 * Model selection strategy. When omitted, inherits the parent model.
+	 * "fastest-available" picks from known cheap/fast model IDs.
+	 */
+	model?: "inherit" | "fastest-available";
+}
+
+/** Known cheap/fast model IDs, ordered by preference (cheapest first). */
+const FAST_MODEL_IDS = [
+	"claude-haiku-4-5-20251001",
+	"claude-haiku",
+	"gpt-4o-mini",
+	"gpt-nano",
+	"gemini-2.0-flash",
+	"gemini-2.5-flash",
+];
+
+/**
+ * Resolve the actual model for a subagent given its spec and the parent model.
+ * If the spec says "fastest-available", picks the first known cheap model that
+ * matches the parent model's provider (to avoid auth issues).
+ * Falls back to parent model if no fast model is available.
+ */
+export function resolveSubagentModel(
+	spec: SubagentSpec,
+	parentModel: { provider: string; id: string } | undefined,
+): { provider: string; id: string } | undefined {
+	if (!parentModel) return undefined;
+
+	const modelStrategy = spec.model ?? "inherit";
+	if (modelStrategy === "inherit") {
+		return parentModel;
+	}
+
+	// fastest-available: pick a known cheap model from the same provider
+	if (modelStrategy === "fastest-available") {
+		for (const fastId of FAST_MODEL_IDS) {
+			// Try to find a fast model from the same provider
+			if (parentModel.id.toLowerCase().includes(fastId.toLowerCase().split("-")[0])) {
+				return { provider: parentModel.provider, id: fastId };
+			}
+		}
+		// Fall back to parent if no fast model from same provider
+		return parentModel;
+	}
+
+	return parentModel;
 }
 
 const FINDER_SPEC: SubagentSpec = {
@@ -13,6 +71,9 @@ const FINDER_SPEC: SubagentSpec = {
 	systemPrompt:
 		"You are a finder subagent. Search the codebase efficiently using grep, find, read, and ls. Return a concise summary of what you found. Do not edit or write files.",
 	allowedTools: ["grep", "find", "read", "bash", "ls"],
+	// Amp's finder uses Haiku (cheapest) — we use fastest-available to pick
+	// the cheapest model the user has configured.
+	model: "fastest-available",
 };
 
 /**
@@ -43,6 +104,9 @@ const ORACLE_SPEC: SubagentSpec = {
 		"- Only your final message is returned to the calling agent, so put the full answer in your final message.",
 	].join("\n"),
 	allowedTools: ["read", "grep", "find", "ls", "bash"],
+	// Oracle needs reasoning capability — inherit parent model so it gets
+	// whatever model the user has chosen for its reasoning strength.
+	model: "inherit",
 };
 
 const REGISTRY = new Map<string, SubagentSpec>([

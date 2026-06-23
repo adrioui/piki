@@ -6,7 +6,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { getSubagentSpec } from "../subagent/registry.ts";
+import { getSubagentSpec, resolveSubagentModel } from "../subagent/registry.ts";
 import { runSubagent, type SubagentTool } from "../subagent/runtime.ts";
 
 const findFilesSchema = Type.Object({
@@ -63,9 +63,23 @@ export function createFindFilesToolDefinition(
 					};
 				}
 
+				// Use the subagent's model preference (e.g. fastest-available for finder)
+				const subagentModel = resolveSubagentModel(spec, resolvedModel);
+				if (!subagentModel) {
+					return {
+						content: [{ type: "text" as const, text: "Error: no model available for finder subagent" }],
+						details: {},
+					};
+				}
+				const subagentModelInstance: Model<string> = {
+					...resolvedModel,
+					provider: subagentModel.provider,
+					id: subagentModel.id,
+				};
+
 				const result = await runSubagent(
 					{
-						model: resolvedModel,
+						model: subagentModelInstance,
 						systemPrompt: spec.systemPrompt,
 						userMessage: params.query,
 						allowedTools: spec.allowedTools,
