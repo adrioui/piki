@@ -551,7 +551,7 @@ export class AgentSession {
 			}
 
 			// Guarded path check: block mutating tools on sensitive paths
-			const mutatingTools = new Set(["edit", "write", "bash", "edit-diff"]);
+			const mutatingTools = new Set(["edit", "write", "bash", "edit-diff", "restore_snapshot"]);
 			if (mutatingTools.has(toolCall.name)) {
 				const guardedPathResult = checkInputForGuardedPaths(input);
 				if (guardedPathResult) {
@@ -2858,11 +2858,36 @@ export class AgentSession {
 			// Build SubagentTool adapters from the base built-in tools the main
 			// agent has. These reuse the already-registered tool definitions so the
 			// subagents run against the same implementations (and overrides).
+			// Each delegated call routes through the permission gate and
+			// guarded-path policy so subagents cannot bypass security checks.
 			const toSubagentTool = (tool: AgentTool) => ({
 				name: tool.name,
 				parameters: tool.parameters,
-				execute: (id: string, args: unknown, signal: AbortSignal | undefined) =>
-					tool.execute(id, args, signal, undefined),
+				execute: (id: string, args: unknown, signal: AbortSignal | undefined) => {
+					const input = args as Record<string, unknown>;
+					const knownTools = Array.from(toolRegistry.keys());
+					const permDecision = evaluatePermission(tool.name, input, {
+						userRules: this._permissionRules,
+						interactive: false,
+						context: "subagent",
+						knownTools,
+					});
+					if (!permDecision.permitted) {
+						throw new Error(
+							`[Permission Gate] Subagent tool \`${tool.name}\` blocked. ${permDecision.reason ?? "No matching permission rule."}`,
+						);
+					}
+					const mutatingTools = new Set(["edit", "write", "bash", "edit-diff"]);
+					if (mutatingTools.has(tool.name)) {
+						const guardedPathResult = checkInputForGuardedPaths(input);
+						if (guardedPathResult) {
+							throw new Error(
+								`[Permission Gate] Subagent tool \`${tool.name}\` blocked on guarded path \`${guardedPathResult.path}\`.`,
+							);
+						}
+					}
+					return tool.execute(id, args, signal, undefined);
+				},
 			});
 			const baseTools = Array.from(toolRegistry.values());
 			const readOnlySubagentTools = baseTools

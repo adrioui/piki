@@ -126,7 +126,7 @@ export function formatEnvironmentSnapshot(provider: EnvironmentSnapshotProvider)
 	const hostname = sanitizeField(provider.hostname);
 	const username = sanitizeField(provider.username);
 	const gitBranch = sanitizeField(provider.gitBranch);
-	const repoUrl = sanitizeField(provider.repoUrl);
+	const repoUrl = redactRepoUrl(sanitizeField(provider.repoUrl));
 	const shell = sanitizeField(provider.shell);
 	const timezone = sanitizeField(provider.timezone);
 
@@ -265,6 +265,33 @@ function readRepoUrl(cwd: string): string | null {
 	});
 	if (result.status !== 0) return null;
 	return sanitizeField(result.stdout);
+}
+
+/**
+ * Redact credentials from a git remote URL.
+ * Strips userinfo (e.g. `token@`) from HTTPS URLs to avoid leaking tokens
+ * into the system prompt. SSH-style URLs (`git@...`) are left unchanged
+ * because they carry a key hint, not a secret.
+ */
+export function redactRepoUrl(url: string | null | undefined): string | null {
+	if (!url) return null;
+	const trimmed = url.trim();
+	if (!trimmed) return null;
+	// SSH-style: git@example.com:org/repo.git — leave as-is.
+	if (/^[^:]+@/.test(trimmed) && !trimmed.includes("://")) {
+		return trimmed;
+	}
+	try {
+		const parsed = new URL(trimmed);
+		if (parsed.username || parsed.password) {
+			parsed.username = "";
+			parsed.password = "";
+			return parsed.toString();
+		}
+		return trimmed;
+	} catch {
+		return trimmed;
+	}
 }
 
 /**

@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
@@ -185,9 +185,22 @@ export function loadProjectContextFiles(options: {
 
 	contextFiles.push(...ancestorContextFiles);
 
-	// Phase 2: Discover context files in descendant directories (for glob-scoped guidance)
+	// Phase 2: Discover context files in descendant directories (for glob-scoped guidance).
+	// Only include descendant files when a touched file falls under their directory
+	// or when the file's globs match a touched path. Without touched files, descendant
+	// guidance is excluded to avoid injecting unrelated subdirectory instructions globally.
 	const descendantContextFiles = findDescendantContextFiles(resolvedCwd);
-	for (const contextFile of descendantContextFiles) {
+	const descendantFiltered =
+		touchedFiles.length > 0
+			? descendantContextFiles.filter((cf) => {
+					const descendantDir = dirname(cf.path);
+					return touchedFiles.some((touchedPath) => {
+						const resolved = resolve(touchedPath);
+						return resolved.startsWith(descendantDir + sep) || resolved === descendantDir;
+					});
+				})
+			: [];
+	for (const contextFile of descendantFiltered) {
 		if (!seenPaths.has(contextFile.path)) {
 			contextFiles.push(contextFile);
 			seenPaths.add(contextFile.path);

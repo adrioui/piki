@@ -2,11 +2,14 @@
  * Tests for the task tool.
  */
 
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall, type Model, registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentTool } from "../src/core/subagent/runtime.ts";
-import { createTaskToolDefinition, DEFAULT_TASK_TOOLS } from "../src/core/tools/task.ts";
+import { buildContextFirewall, createTaskToolDefinition, DEFAULT_TASK_TOOLS } from "../src/core/tools/task.ts";
 
 describe("task tool", () => {
 	const registrations: Array<() => void> = [];
@@ -178,5 +181,38 @@ describe("task tool", () => {
 		expect(def.description).toContain("isolated subagent");
 		expect(def.promptGuidelines?.some((g) => g.includes("self-contained"))).toBe(true);
 		expect(def.promptGuidelines?.some((g) => g.includes("Restrict task tools"))).toBe(true);
+	});
+});
+
+describe("buildContextFirewall", () => {
+	it("discovers AGENTS.md in parent directories", () => {
+		const tempDir = join(tmpdir(), `ctxfw-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const childDir = join(tempDir, "packages", "coding-agent");
+		mkdirSync(childDir, { recursive: true });
+
+		try {
+			writeFileSync(join(tempDir, "AGENTS.md"), "# Root instructions");
+			writeFileSync(join(childDir, "AGENTS.md"), "# Child instructions");
+
+			const result = buildContextFirewall(childDir);
+			expect(result).toBeTruthy();
+			expect(result).toContain("Root instructions");
+			expect(result).toContain("Child instructions");
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns null when no git or AGENTS.md exists", () => {
+		const tempDir = join(tmpdir(), `ctxfw-empty-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tempDir, { recursive: true });
+
+		try {
+			// No git init and no AGENTS.md — should return null
+			const result = buildContextFirewall(tempDir);
+			expect(result).toBeNull();
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });

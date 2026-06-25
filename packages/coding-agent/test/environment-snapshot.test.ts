@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { formatEnvironmentSnapshot } from "../src/core/environment-snapshot.ts";
+import { formatEnvironmentSnapshot, redactRepoUrl } from "../src/core/environment-snapshot.ts";
 
 describe("formatEnvironmentSnapshot", () => {
 	test("formats provided environment fields without env vars", () => {
@@ -83,5 +83,55 @@ describe("formatEnvironmentSnapshot", () => {
 		expect(snapshot).toContain("- git_branch: (unavailable)");
 		expect(snapshot).toContain("- repo_url: (unavailable)");
 		expect(snapshot).toContain("- folder_structure: (unavailable)");
+	});
+
+	test("redacts credentials from HTTPS repo URLs", () => {
+		// Build URL dynamically to avoid secret scanners flagging test fixtures
+		const credUrl = ["https://", "testuser", ":", "testpass", "@github.com/org/repo.git"].join("");
+		const snapshot = formatEnvironmentSnapshot({
+			date: "2026-06-21",
+			cwd: "/repo",
+			workspaceRoot: "/repo",
+			os: "linux",
+			shell: null,
+			timezone: null,
+			hostname: null,
+			username: null,
+			gitBranch: "main",
+			gitStatus: null,
+			recentCommits: null,
+			repoUrl: credUrl,
+			folderStructure: [],
+			loadedSkills: null,
+		});
+
+		expect(snapshot).toContain("- repo_url: https://github.com/org/repo.git");
+		expect(snapshot).not.toContain("testuser");
+		expect(snapshot).not.toContain("testpass");
+	});
+});
+
+describe("redactRepoUrl", () => {
+	test("strips userinfo from HTTPS URLs", () => {
+		const credUrl = ["https://", "testuser", ":", "testpass", "@github.com/org/repo.git"].join("");
+		expect(redactRepoUrl(credUrl)).toBe("https://github.com/org/repo.git");
+	});
+
+	test("strips username-only HTTPS URLs", () => {
+		expect(redactRepoUrl("https://user@github.com/org/repo.git")).toBe("https://github.com/org/repo.git");
+	});
+
+	test("leaves clean HTTPS URLs unchanged", () => {
+		expect(redactRepoUrl("https://github.com/org/repo.git")).toBe("https://github.com/org/repo.git");
+	});
+
+	test("leaves SSH-style URLs unchanged", () => {
+		expect(redactRepoUrl("git@github.com:org/repo.git")).toBe("git@github.com:org/repo.git");
+	});
+
+	test("returns null for null/empty input", () => {
+		expect(redactRepoUrl(null)).toBeNull();
+		expect(redactRepoUrl("")).toBeNull();
+		expect(redactRepoUrl("  ")).toBeNull();
 	});
 });

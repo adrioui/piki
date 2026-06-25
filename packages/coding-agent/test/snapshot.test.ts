@@ -9,7 +9,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createSnapshot, isGitRepo, listSnapshots, restoreSnapshot } from "../src/core/snapshot.ts";
+import {
+	createSnapshot,
+	diffSnapshotAgainstWorktree,
+	isGitRepo,
+	listSnapshots,
+	restoreSnapshot,
+} from "../src/core/snapshot.ts";
 
 /** Create a minimal git repo at a temp location and return the path. */
 function createTempGitRepo(): string {
@@ -192,5 +198,46 @@ describe("listSnapshots", () => {
 	it("returns empty for a different session ID", () => {
 		const entries = listSnapshots(repoDir, "other-session");
 		expect(entries.length).toBe(0);
+	});
+});
+
+describe("diffSnapshotAgainstWorktree", () => {
+	let repoDir: string;
+
+	beforeAll(() => {
+		repoDir = createTempGitRepo();
+	});
+
+	afterAll(() => {
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+
+	it("includes untracked files in changedFiles", () => {
+		const oid = createSnapshot(repoDir, "diff-test", "snap-1");
+		expect(oid).toBeTruthy();
+
+		// Create an untracked file (not staged)
+		writeFileSync(join(repoDir, "untracked.txt"), "new content\n");
+
+		const result = diffSnapshotAgainstWorktree(repoDir, oid!);
+		expect(result.changedFiles).toContain("untracked.txt");
+
+		// Clean up
+		rmSync(join(repoDir, "untracked.txt"));
+	});
+
+	it("includes both tracked and untracked changes", () => {
+		// Modify a tracked file
+		writeFileSync(join(repoDir, "readme.md"), "# Modified\n");
+		const oid = createSnapshot(repoDir, "diff-test", "snap-2");
+		expect(oid).toBeTruthy();
+
+		// Change tracked file and add untracked
+		writeFileSync(join(repoDir, "readme.md"), "# Changed again\n");
+		writeFileSync(join(repoDir, "new-file.txt"), "brand new\n");
+
+		const result = diffSnapshotAgainstWorktree(repoDir, oid!);
+		expect(result.changedFiles).toContain("readme.md");
+		expect(result.changedFiles).toContain("new-file.txt");
 	});
 });

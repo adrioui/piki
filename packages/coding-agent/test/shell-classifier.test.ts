@@ -64,5 +64,22 @@ describe("shell-classifier", () => {
 			expect(classifyShellCommand("psql postgres://prod").level).toBe("forbidden");
 			expect(classifyShellCommand("systemctl restart nginx").level).toBe("forbidden");
 		});
+
+		it("blocks find -delete", () => {
+			const result = classifyShellCommand("find . -name '*.tmp' -delete");
+			expect(result.level).toBe("forbidden");
+			expect(result.reason).toContain("find -delete");
+		});
+
+		it("blocks find -exec rm", () => {
+			const result = classifyShellCommand("find . -name '*.log' -exec rm {} +");
+			expect(result.level).toBe("forbidden");
+			expect(result.reason).toContain("rm");
+		});
+
+		it("allows read-only find commands", () => {
+			expect(classifyShellCommand("find . -name '*.ts' -print").level).not.toBe("forbidden");
+			expect(classifyShellCommand("find src -type f").level).not.toBe("forbidden");
+		});
 	});
 });

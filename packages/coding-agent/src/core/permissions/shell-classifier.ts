@@ -426,6 +426,43 @@ function classifySegment(segment: ShellCommandSegment): ShellClassification {
 	if (name === "chmod" && args.includes("-R") && args.includes("777")) {
 		return { level: "forbidden", reason: "recursive chmod 777 is blocked", command: segment };
 	}
+	// Block `find` with mutating actions: -delete, -exec rm, -execdir rm, etc.
+	if (name === "find") {
+		const DANGEROUS_EXEC_COMMANDS = new Set(["rm", "rmdir", "shred", "mkfs", "dd", "truncate", "chmod", "chown"]);
+		const MUTATING_ACTIONS = ["-exec", "-execdir", "-ok", "-okdir"];
+		if (args.includes("-delete")) {
+			return { level: "forbidden", reason: "find -delete can mutate the filesystem", command: segment };
+		}
+		for (const action of MUTATING_ACTIONS) {
+			const actionIndex = args.indexOf(action);
+			if (actionIndex !== -1) {
+				// The next arg after the action is the command to execute.
+				const execCmd = args[actionIndex + 1];
+				if (execCmd && !execCmd.startsWith("-") && !execCmd.startsWith("{") && !execCmd.startsWith(";")) {
+					const execBase = basename(execCmd);
+					if (DANGEROUS_EXEC_COMMANDS.has(execBase)) {
+						return {
+							level: "forbidden",
+							reason: `find ${action} with destructive command "${execBase}" is blocked`,
+							command: segment,
+						};
+					}
+				}
+				// Block any -exec that ends with + (batch mode) since it can have
+				// elevated blast radius with destructive commands.
+				if (args.includes("+") && args.indexOf("+") > actionIndex) {
+					const execCmdBatch = args[actionIndex + 1];
+					if (execCmdBatch && DANGEROUS_EXEC_COMMANDS.has(basename(execCmdBatch ?? ""))) {
+						return {
+							level: "forbidden",
+							reason: `find ${action} with batched destructive command is blocked`,
+							command: segment,
+						};
+					}
+				}
+			}
+		}
+	}
 	if (name === "git") return { ...classifyGit(args)!, command: segment };
 	if (name === "kubectl") return { ...classifyKubectl(args)!, command: segment };
 	if (DB_SHELLS.has(name))

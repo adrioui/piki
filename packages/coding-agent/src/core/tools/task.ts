@@ -8,7 +8,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import { type Static, Type } from "typebox";
@@ -80,8 +80,8 @@ export function buildContextFirewall(cwd: string, maxRecentCommits = 10, maxAgen
 
 	// Add AGENTS.md files from cwd and parent directories
 	const agentsFiles: Array<{ path: string; content: string }> = [];
-	let currentDir = cwd;
-	const root = join(cwd, "..");
+	const root = resolve("/");
+	let currentDir = resolve(cwd);
 
 	while (currentDir !== root && agentsFiles.length < maxAgentsFiles) {
 		const agentsPath = join(currentDir, "AGENTS.md");
@@ -95,7 +95,7 @@ export function buildContextFirewall(cwd: string, maxRecentCommits = 10, maxAgen
 			}
 		}
 
-		const parentDir = join(currentDir, "..");
+		const parentDir = resolve(currentDir, "..");
 		if (parentDir === currentDir) break;
 		currentDir = parentDir;
 	}

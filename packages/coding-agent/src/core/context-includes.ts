@@ -124,7 +124,10 @@ export function expandAtFileIncludes(
 	const seen = new Set<string>();
 	let totalBytes = 0;
 
-	const cleanContent = stripFencedCodeBlocks(content);
+	// Unified regex that matches fenced code blocks OR @mentions.
+	// Fenced blocks are emitted verbatim; mentions outside fences are expanded.
+	const fencePattern = "(^|\\n)(\\`{3,}|~{3,})[^\\n]*\\n([\\s\\S]*?)(\\n\\2)(?=\\n|$)";
+	const FENCE_OR_MENTION = new RegExp(`${fencePattern}|${AT_MENTION.source}`, "gm");
 
 	const expand = (mention: string, depth: number): string => {
 		const resolved = resolveMentionPath(mention, contextDir, homeDir);
@@ -172,57 +175,49 @@ export function expandAtFileIncludes(
 		included.push(resolved);
 
 		// Recursively expand nested includes in the included content, bounded by
-		// depth. Rebuild positionally so the shared `seen` set is honored per
-		// occurrence (first occurrence inlined, later duplicates dropped).
-		const nestedClean = stripFencedCodeBlocks(fileContent);
-		const nestedRegex = new RegExp(AT_MENTION.source, "g");
-		nestedRegex.lastIndex = 0;
-		let nestedLast = 0;
-		const nestedOut: string[] = [];
-		let nestedMatch = nestedRegex.exec(nestedClean);
-		while (nestedMatch !== null) {
-			const nprefix = nestedMatch[1] ?? "";
-			const nmention = nestedMatch[2];
-			if (isLikelyPath(nmention)) {
-				nestedOut.push(nestedClean.slice(nestedLast, nestedMatch.index + nprefix.length));
-				nestedOut.push(expand(nmention, depth + 1));
-			}
-			nestedLast = nestedMatch.index + nestedMatch[0].length;
-			nestedMatch = nestedRegex.exec(nestedClean);
-		}
-		nestedOut.push(nestedClean.slice(nestedLast));
-		const nestedExpanded = nestedOut.join("");
+		// depth. Scan the original content (preserving code blocks) for mentions.
+		const nestedExpanded = expandMentionsInText(fileContent, depth + 1);
 
 		const header = `<!-- included from ${mention} -->\n`;
 		return `${header}${nestedExpanded}`;
 	};
 
-	// Replace @mention tokens positionally, one occurrence at a time, so the
-	// shared `seen` set is honored across the whole document: the first
-	// occurrence of a file is inlined, later occurrences of the same resolved
-	// file are dropped. We rebuild the string by scanning the cleaned content
-	// (code blocks already stripped) for mention tokens.
-	const tokenRegex = new RegExp(AT_MENTION.source, "g");
-	tokenRegex.lastIndex = 0;
-	let lastIndex = 0;
-	const out: string[] = [];
-	let match = tokenRegex.exec(cleanContent);
-	while (match !== null) {
-		const prefix = match[1] ?? "";
-		const mention = match[2];
-		if (isLikelyPath(mention)) {
-			// Append text between the last handled position and this match.
-			const matchStart = match.index + prefix.length;
-			out.push(cleanContent.slice(lastIndex, matchStart));
-			const replacement = expand(mention, 0);
-			out.push(replacement);
-			lastIndex = match.index + match[0].length;
+	/**
+	 * Scan `text` for @mention tokens that appear outside fenced code blocks
+	 * and expand them. Fenced code blocks are preserved verbatim.
+	 */
+	function expandMentionsInText(text: string, depth: number): string {
+		FENCE_OR_MENTION.lastIndex = 0;
+		let lastIndex = 0;
+		const out: string[] = [];
+		let m = FENCE_OR_MENTION.exec(text);
+		while (m !== null) {
+			if (m[2]) {
+				// This is a fenced code block match — keep it verbatim.
+				m = FENCE_OR_MENTION.exec(text);
+				continue;
+			}
+			// This is an @mention match. m[6] is the path capture group.
+			const prefix = m[5] ?? "";
+			const mention = m[6];
+			if (mention && isLikelyPath(mention)) {
+				const matchStart = m.index + prefix.length;
+				out.push(text.slice(lastIndex, matchStart));
+				out.push(expand(mention, depth));
+				lastIndex = m.index + m[0].length;
+			}
+			m = FENCE_OR_MENTION.exec(text);
 		}
-		match = tokenRegex.exec(cleanContent);
+		out.push(text.slice(lastIndex));
+		return out.join("");
 	}
-	out.push(cleanContent.slice(lastIndex));
 
-	return { content: out.join(""), included, warnings };
+	// Scan the original content for @mention tokens that appear outside
+	// fenced code blocks and expand them. Fenced code blocks are preserved
+	// verbatim in the output.
+	const contentResult = expandMentionsInText(content, 0);
+
+	return { content: contentResult, included, warnings };
 }
 
 // ---------------------------------------------------------------------------

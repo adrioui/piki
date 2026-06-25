@@ -153,6 +153,32 @@ describe("expandAtFileIncludes", () => {
 		expect(result.content).toContain("C content");
 		expect(result.content).toContain("D content");
 	});
+
+	it("preserves fenced code blocks while ignoring @mentions inside them", () => {
+		writeFileSync(join(tempDir, "extra.md"), "EXTRA CONTENT");
+		const contextPath = join(tempDir, "AGENTS.md");
+		writeFileSync(contextPath, "before\n```bash\n@extra.md\n```\nafter @extra.md");
+
+		const result = expandAtFileIncludes(read(contextPath), contextPath);
+		// Code block is preserved verbatim
+		expect(result.content).toContain("```bash");
+		expect(result.content).toContain("@extra.md");
+		// The @extra.md outside the code block is expanded
+		expect(result.content).toContain("EXTRA CONTENT");
+		// Only one include (the one outside the code block)
+		expect(result.included).toHaveLength(1);
+	});
+
+	it("preserves tilde fenced code blocks", () => {
+		writeFileSync(join(tempDir, "rules.md"), "RULES CONTENT");
+		const contextPath = join(tempDir, "AGENTS.md");
+		writeFileSync(contextPath, "before\n~~~\n@rules.md\n~~~\nafter @rules.md");
+
+		const result = expandAtFileIncludes(read(contextPath), contextPath);
+		expect(result.content).toContain("~~~");
+		expect(result.content).toContain("RULES CONTENT");
+		expect(result.included).toHaveLength(1);
+	});
 });
 
 describe("glob-scoped guidance", () => {

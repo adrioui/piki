@@ -302,23 +302,45 @@ export function diffSnapshotAgainstWorktree(
 			encoding: "utf-8",
 		}).trim();
 
-		if (!changedFilesRaw) {
-			return { changedFiles: [], diff: "" };
+		const changedFiles: string[] = [];
+		if (changedFilesRaw) {
+			for (const line of changedFilesRaw.split("\n")) {
+				const parts = line.split("\t");
+				if (parts.length >= 2) {
+					changedFiles.push(parts[parts.length - 1]);
+				}
+			}
 		}
 
-		const changedFiles: string[] = [];
-		for (const line of changedFilesRaw.split("\n")) {
-			const parts = line.split("\t");
-			if (parts.length >= 2) {
-				changedFiles.push(parts[parts.length - 1]);
+		// Also include untracked files not in the snapshot tree. These are
+		// files created after the snapshot was taken and won't appear in
+		// `git diff <tree>` because git has no prior version to diff against.
+		try {
+			const untrackedArgs = ["ls-files", "--others", "--exclude-standard"];
+			if (globPattern) {
+				untrackedArgs.push("--", globPattern);
 			}
+			const untrackedRaw = execFileSync("git", untrackedArgs, {
+				cwd: workspaceRoot,
+				stdio: "pipe",
+				encoding: "utf-8",
+			}).trim();
+			if (untrackedRaw) {
+				for (const file of untrackedRaw.split("\n")) {
+					if (file && !changedFiles.includes(file)) {
+						changedFiles.push(file);
+					}
+				}
+			}
+		} catch {
+			// ls-files failure is non-fatal; fall through with tracked changes only
 		}
 
 		if (changedFiles.length === 0) {
 			return { changedFiles: [], diff: "" };
 		}
 
-		// Generate full diff
+		// Generate full diff for tracked changes
 		const diffArgs = ["diff", "--no-color", fromTreeOID];
 		if (globPattern) {
 			diffArgs.push("--", globPattern);
