@@ -1,11 +1,12 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { TSchema } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 
 /** Wrap a ToolDefinition into an AgentTool for the core runtime. */
-export function wrapToolDefinition<TDetails = unknown>(
-	definition: ToolDefinition<any, TDetails>,
+export function wrapToolDefinition<TParameters extends TSchema, TDetails = unknown>(
+	definition: ToolDefinition<TParameters, TDetails>,
 	ctxFactory?: () => ExtensionContext,
-): AgentTool<any, TDetails> {
+): AgentTool<TParameters, TDetails> {
 	return {
 		name: definition.name,
 		label: definition.label,
@@ -19,10 +20,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 }
 
 /** Wrap multiple ToolDefinitions into AgentTools for the core runtime. */
-export function wrapToolDefinitions(
-	definitions: ToolDefinition<any, any>[],
-	ctxFactory?: () => ExtensionContext,
-): AgentTool<any>[] {
+export function wrapToolDefinitions(definitions: ToolDefinition[], ctxFactory?: () => ExtensionContext): AgentTool[] {
 	return definitions.map((definition) => wrapToolDefinition(definition, ctxFactory));
 }
 
@@ -32,12 +30,14 @@ export function wrapToolDefinitions(
  * This keeps AgentSession's internal registry definition-first even when a caller
  * provides plain AgentTool overrides that do not include prompt metadata or renderers.
  */
-export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDefinition<any, unknown> {
+export function createToolDefinitionFromAgentTool<TParameters extends TSchema>(
+	tool: AgentTool<TParameters>,
+): ToolDefinition<TParameters, unknown> {
 	return {
 		name: tool.name,
 		label: tool.label,
 		description: tool.description,
-		parameters: tool.parameters as any,
+		parameters: tool.parameters,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),

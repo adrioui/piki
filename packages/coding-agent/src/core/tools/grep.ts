@@ -60,6 +60,49 @@ const defaultGrepOperations: GrepOperations = {
 	readFile: (p) => fsReadFile(p, "utf-8"),
 };
 
+interface RipgrepJsonMatch {
+	type: "match";
+	data: {
+		path: { text: string };
+		line_number: number;
+		lines?: { text?: string };
+	};
+}
+
+function parseRipgrepMatch(line: string): RipgrepJsonMatch | undefined {
+	const parsed: unknown = JSON.parse(line);
+	if (!parsed || typeof parsed !== "object") {
+		return undefined;
+	}
+	const event = parsed as { type?: unknown; data?: unknown };
+	if (event.type !== "match" || !event.data || typeof event.data !== "object") {
+		return undefined;
+	}
+	const data = event.data as Record<string, unknown>;
+	const pathData = data.path;
+	if (
+		!pathData ||
+		typeof pathData !== "object" ||
+		typeof (pathData as { text?: unknown }).text !== "string" ||
+		typeof data.line_number !== "number"
+	) {
+		return undefined;
+	}
+	const lines = data.lines;
+	const lineText =
+		lines && typeof lines === "object" && typeof (lines as { text?: unknown }).text === "string"
+			? (lines as { text: string }).text
+			: undefined;
+	return {
+		type: "match",
+		data: {
+			path: { text: (pathData as { text: string }).text },
+			line_number: data.line_number,
+			lines: lineText === undefined ? undefined : { text: lineText },
+		},
+	};
+}
+
 export interface GrepToolOptions {
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
 	operations?: GrepOperations;
@@ -271,19 +314,18 @@ export function createGrepToolDefinition(
 						const matches: Array<{ filePath: string; lineNumber: number; lineText?: string }> = [];
 						rl.on("line", (line) => {
 							if (!line.trim() || matchCount >= effectiveLimit) return;
-							let event: any;
+							let event: RipgrepJsonMatch | undefined;
 							try {
-								event = JSON.parse(line);
+								event = parseRipgrepMatch(line);
 							} catch {
 								return;
 							}
-							if (event.type === "match") {
+							if (event) {
 								matchCount++;
-								const filePath = event.data?.path?.text;
-								const lineNumber = event.data?.line_number;
-								const lineText = event.data?.lines?.text;
-								if (filePath && typeof lineNumber === "number")
-									matches.push({ filePath, lineNumber, lineText });
+								const filePath = event.data.path.text;
+								const lineNumber = event.data.line_number;
+								const lineText = event.data.lines?.text;
+								matches.push({ filePath, lineNumber, lineText });
 								if (matchCount >= effectiveLimit) {
 									matchLimitReached = true;
 									stopChild(true);
@@ -374,7 +416,7 @@ export function createGrepToolDefinition(
 		},
 		renderResult(result, options, theme, context) {
 			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-			text.setText(formatGrepResult(result as any, options, theme, context.showImages));
+			text.setText(formatGrepResult(result, options, theme, context.showImages));
 			return text;
 		},
 	};

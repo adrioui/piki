@@ -4,11 +4,12 @@
 
 import type { AssistantMessage, Context, Message, Model, TextContent } from "@earendil-works/pi-ai/compat";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type { TSchema } from "typebox";
 import { ErrorRepeatGuard } from "../error-repeat-guard.ts";
 
 export interface SubagentTool {
 	name: string;
-	parameters: unknown;
+	parameters: TSchema;
 	execute: (id: string, args: unknown, signal: AbortSignal | undefined) => Promise<unknown>;
 }
 
@@ -63,7 +64,7 @@ export async function runSubagent(config: SubagentConfig, signal?: AbortSignal):
 			tools: filteredTools.map((t) => ({
 				name: t.name,
 				description: "",
-				parameters: t.parameters as any,
+				parameters: t.parameters,
 			})),
 		};
 

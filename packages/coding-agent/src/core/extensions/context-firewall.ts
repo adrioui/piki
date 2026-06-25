@@ -12,10 +12,11 @@
  * - Brief summary of what the parent agent has been doing
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { ExtensionAPI, ExtensionFactory } from "./types.ts";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { ExtensionAPI, ExtensionContext, ExtensionFactory, ToolCallEvent } from "./types.ts";
 
 export interface ContextFirewallOptions {
 	/** Root directory of the project */
@@ -29,14 +30,14 @@ export interface ContextFirewallOptions {
 /**
  * Build a concise project-context block for subagents.
  */
-function buildProjectContextBlock(
+function buildSessionStartBlock(
 	cwd: string,
 	branch?: string,
 	recentCommits?: string[],
 	agentsGuidance?: string[],
 	parentActivity?: string,
 ): string {
-	const lines: string[] = ["<project-context>", `  <cwd>${cwd}</cwd>`];
+	const lines: string[] = ["<session-start>", "<project-context>", `  <cwd>${cwd}</cwd>`];
 
 	if (branch) {
 		lines.push(`  <branch>${branch}</branch>`);
@@ -59,10 +60,16 @@ function buildProjectContextBlock(
 	}
 
 	if (parentActivity) {
-		lines.push(`  <parent-activity>${parentActivity}</parent-activity>`);
+		lines.push("</project-context>");
+		lines.push("<transcript>");
+		lines.push(`  LEAD: ${parentActivity}`);
+		lines.push("</transcript>");
+		lines.push("</session-start>");
+		return lines.join("\n");
 	}
 
 	lines.push("</project-context>");
+	lines.push("</session-start>");
 
 	return lines.join("\n");
 }
@@ -90,7 +97,7 @@ function getGitBranch(cwd: string): string | undefined {
  */
 function getRecentCommits(cwd: string, max: number): string[] | undefined {
 	try {
-		const output = execSync(`git log --oneline -n ${max}`, {
+		const output = execFileSync("git", ["log", "--oneline", "-n", String(Math.max(0, Math.floor(max)))], {
 			cwd,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
@@ -105,7 +112,31 @@ function getRecentCommits(cwd: string, max: number): string[] | undefined {
  * Load AGENTS.md guidance relevant to recently touched files.
  * Returns an array of guidance snippets (one per matching AGENTS.md).
  */
-function loadRelevantGuidance(cwd: string, touchedFiles: string[], resourceLoader: any): string[] | undefined {
+interface ContextResourceLoader {
+	touchedFiles?: Iterable<string>;
+	setTouchedFiles(files: string[]): void;
+	reloadContextFiles(): void;
+	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
+}
+
+interface ContextFirewallExtensionContext extends ExtensionContext {
+	resourceLoader?: ContextResourceLoader;
+	messages?: AgentMessage[];
+}
+
+interface TaskToolInput {
+	request?: string;
+}
+
+function hasTaskToolInput(event: ToolCallEvent): event is ToolCallEvent & { input: TaskToolInput } {
+	return typeof event.input === "object" && event.input !== null;
+}
+
+function loadRelevantGuidance(
+	cwd: string,
+	touchedFiles: string[],
+	resourceLoader: ContextResourceLoader | undefined,
+): string[] | undefined {
 	if (!resourceLoader || touchedFiles.length === 0) {
 		return undefined;
 	}
@@ -131,7 +162,24 @@ function loadRelevantGuidance(cwd: string, touchedFiles: string[], resourceLoade
 /**
  * Summarize parent agent activity from recent messages.
  */
-function summarizeParentActivity(messages: any[], maxLength: number): string | undefined {
+function textFromContent(content: unknown): string {
+	if (typeof content === "string") {
+		return content;
+	}
+	if (!Array.isArray(content)) {
+		return "";
+	}
+	return content
+		.map((block) => {
+			if (typeof block === "object" && block !== null && "text" in block && typeof block.text === "string") {
+				return block.text;
+			}
+			return "";
+		})
+		.join("");
+}
+
+function summarizeParentActivity(messages: AgentMessage[], maxLength: number): string | undefined {
 	if (!messages || messages.length === 0) {
 		return undefined;
 	}
@@ -141,13 +189,14 @@ function summarizeParentActivity(messages: any[], maxLength: number): string | u
 	const summaries: string[] = [];
 
 	for (const msg of recent) {
+		if (!("content" in msg)) {
+			continue;
+		}
 		if (msg.role === "user") {
-			const text =
-				typeof msg.content === "string" ? msg.content : msg.content.map((b: any) => b.text || "").join("");
+			const text = textFromContent(msg.content);
 			summaries.push(`User: ${text.slice(0, 100)}`);
 		} else if (msg.role === "assistant") {
-			const text =
-				typeof msg.content === "string" ? msg.content : msg.content.map((b: any) => b.text || "").join("");
+			const text = textFromContent(msg.content);
 			summaries.push(`Assistant: ${text.slice(0, 100)}`);
 		}
 	}
@@ -170,7 +219,8 @@ export function createContextFirewallExtension(options: ContextFirewallOptions):
 			}
 
 			// Get the resource loader from the context if available
-			const resourceLoader = (ctx as any).resourceLoader;
+			const extensionContext = ctx as ContextFirewallExtensionContext;
+			const resourceLoader = extensionContext.resourceLoader;
 
 			// Build project context
 			const branch = getGitBranch(cwd);
@@ -181,18 +231,21 @@ export function createContextFirewallExtension(options: ContextFirewallOptions):
 			const agentsGuidance = loadRelevantGuidance(cwd, touchedFiles, resourceLoader);
 
 			// Get parent activity from conversation history
-			const messages = (ctx as any).messages || [];
+			const messages = extensionContext.messages || [];
 			const parentActivity = summarizeParentActivity(messages, maxActivitySummary);
 
 			// Build the context firewall block
-			const contextBlock = buildProjectContextBlock(cwd, branch, recentCommits, agentsGuidance, parentActivity);
+			const contextBlock = buildSessionStartBlock(cwd, branch, recentCommits, agentsGuidance, parentActivity);
 
 			// Inject into the task request by mutating input
-			const originalRequest = (input as any).request || "";
+			if (!hasTaskToolInput(event)) {
+				return;
+			}
+			const originalRequest = input.request || "";
 			const enhancedRequest = `${contextBlock}\n\n${originalRequest}`;
 
 			// Mutate the input
-			(input as any).request = enhancedRequest;
+			input.request = enhancedRequest;
 
 			console.log("[context-firewall] Injected project context into task subagent");
 		});

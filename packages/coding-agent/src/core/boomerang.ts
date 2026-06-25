@@ -240,7 +240,7 @@ export function buildSessionTree(entries: SessionEntry[]): SessionTreeNode[] {
 	for (const entry of entries) {
 		const node: SessionTreeNode = {
 			id: entry.id,
-			parentId: (entry as any).parentUuid ?? null,
+			parentId: entry.parentId,
 			childIds: [],
 			isActive: false,
 		};

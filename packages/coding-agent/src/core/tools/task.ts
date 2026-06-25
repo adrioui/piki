@@ -6,7 +6,7 @@
  * subagents. This is the pi analogue of Amp's Task tool.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -34,12 +34,12 @@ export function buildContextFirewall(cwd: string, maxRecentCommits = 10, maxAgen
 
 	// Add git branch and status
 	try {
-		const branch = execSync("git rev-parse --abbrev-ref HEAD", {
+		const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
 			cwd,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
 		}).trim();
-		const status = execSync("git status --porcelain", {
+		const status = execFileSync("git", ["status", "--porcelain"], {
 			cwd,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
@@ -62,7 +62,7 @@ export function buildContextFirewall(cwd: string, maxRecentCommits = 10, maxAgen
 
 	// Add recent commits
 	try {
-		const log = execSync(`git log --oneline -n ${maxRecentCommits}`, {
+		const log = execFileSync("git", ["log", "--oneline", "-n", String(Math.max(0, Math.floor(maxRecentCommits)))], {
 			cwd,
 			encoding: "utf-8",
 			stdio: ["pipe", "pipe", "pipe"],
