@@ -6,6 +6,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import { type AgentMode, isAgentMode } from "./modes.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -93,6 +94,7 @@ export interface Settings {
 	defaultProvider?: string;
 	defaultModel?: string;
 	defaultThinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+	agentMode?: AgentMode;
 	transport?: TransportSetting; // default: "auto"
 	steeringMode?: "all" | "one-at-a-time";
 	followUpMode?: "all" | "one-at-a-time";
@@ -685,6 +687,12 @@ export class SettingsManager {
 
 	getDefaultModel(): string | undefined {
 		return this.settings.defaultModel;
+	}
+
+	getAgentMode(): AgentMode | undefined {
+		const mode = this.settings.agentMode;
+		if (mode && isAgentMode(mode)) return mode;
+		return undefined;
 	}
 
 	setDefaultProvider(provider: string): void {

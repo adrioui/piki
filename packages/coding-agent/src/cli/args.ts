@@ -6,6 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
+import { AGENT_MODES, type AgentMode, isAgentMode } from "../core/modes.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
@@ -21,6 +22,7 @@ export interface Args {
 	help?: boolean;
 	version?: boolean;
 	mode?: Mode;
+	agentMode?: AgentMode;
 	name?: string;
 	noSession?: boolean;
 	session?: string;
@@ -79,6 +81,16 @@ export function parseArgs(args: string[]): Args {
 			const mode = args[++i];
 			if (mode === "text" || mode === "json" || mode === "rpc") {
 				result.mode = mode;
+			}
+		} else if (arg === "--agent-mode" && i + 1 < args.length) {
+			const mode = args[++i];
+			if (isAgentMode(mode)) {
+				result.agentMode = mode;
+			} else {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid agent mode "${mode}". Valid values: ${AGENT_MODES.join(", ")}`,
+				});
 			}
 		} else if (arg === "--continue" || arg === "-c") {
 			result.continue = true;
@@ -232,6 +244,8 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} update [source|self|pi]   Update pi (use --all for pi and extensions)
   ${APP_NAME} list                      List installed extensions from settings
   ${APP_NAME} config                    Open TUI to enable/disable package resources
+  ${APP_NAME} sessions search [query]   Search saved sessions
+  ${APP_NAME} sessions export <id|path> Export a saved session as Markdown or JSON
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}
@@ -241,6 +255,7 @@ ${chalk.bold("Options:")}
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
   --mode <mode>                  Output mode: text (default), json, or rpc
+  --agent-mode <mode>            Tool mode: default, read-only, plan, or build
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
   --resume, -r                   Select a session to resume
