@@ -7,6 +7,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -116,6 +117,14 @@ export function createSnapshot(workspaceRoot: string, sessionId: string, message
 	}
 }
 
+export function createCheckpointId(kind: "turn-start" | "turn-end" | "manual" | "redo"): string {
+	return `${Date.now()}-${kind}-${cryptoRandomSuffix()}`;
+}
+
+function cryptoRandomSuffix(): string {
+	return randomUUID().slice(0, 8);
+}
+
 /**
  * Restore the working tree to a previous snapshot.
  *
@@ -128,7 +137,7 @@ export function restoreSnapshot(workspaceRoot: string, treeOID: string, path?: s
 	try {
 		execFileSync(
 			"git",
-			["clean", "-fd", "-e", ".git", "-e", ".pi", checkoutPath === "." ? "" : checkoutPath].filter(Boolean),
+			["clean", "-f", "-e", ".git", "-e", ".pi", checkoutPath === "." ? "" : checkoutPath].filter(Boolean),
 			{ cwd: workspaceRoot, stdio: "pipe" },
 		);
 	} catch {
@@ -153,7 +162,7 @@ export function restoreSnapshot(workspaceRoot: string, treeOID: string, path?: s
 export function listSnapshots(
 	workspaceRoot: string,
 	sessionId: string,
-): Array<{ messageId: string; treeOID: string; timestamp: number }> {
+): Array<{ messageId: string; treeOID: string; timestamp: number; index: number }> {
 	try {
 		const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], {
 			cwd: workspaceRoot,
@@ -167,7 +176,7 @@ export function listSnapshots(
 			return [];
 		}
 
-		const entries: Array<{ messageId: string; treeOID: string; timestamp: number }> = [];
+		const entries: Array<{ messageId: string; treeOID: string; timestamp: number; index: number }> = [];
 
 		for (const file of readdirSync(refsDir)) {
 			const filePath = join(refsDir, file);
@@ -177,13 +186,44 @@ export function listSnapshots(
 				messageId: file,
 				treeOID: content,
 				timestamp: stat.mtimeMs,
+				index: 0,
 			});
 		}
 
-		return entries.sort((a, b) => a.timestamp - b.timestamp);
+		return entries.sort((a, b) => a.timestamp - b.timestamp).map((entry, index) => ({ ...entry, index }));
 	} catch {
 		return [];
 	}
+}
+
+export function resolveSnapshotSelector(
+	workspaceRoot: string,
+	sessionId: string,
+	selector: string | undefined,
+): { messageId: string; treeOID: string; timestamp: number; index: number } | undefined {
+	const snapshots = listSnapshots(workspaceRoot, sessionId);
+	if (snapshots.length === 0) return undefined;
+	const value = selector?.trim() || "latest";
+	if (value === "latest" || value === "last") return snapshots[snapshots.length - 1];
+	if (value === "previous" || value === "prev") return snapshots[snapshots.length - 2] ?? snapshots[0];
+
+	const numeric = Number.parseInt(value, 10);
+	if (Number.isInteger(numeric) && String(numeric) === value) {
+		return snapshots[numeric];
+	}
+
+	const date = new Date(value);
+	if (!Number.isNaN(date.getTime())) {
+		let candidate: (typeof snapshots)[number] | undefined;
+		for (const snapshot of snapshots) {
+			if (snapshot.timestamp <= date.getTime()) {
+				candidate = snapshot;
+			}
+		}
+		return candidate ?? snapshots[0];
+	}
+
+	return snapshots.find((snapshot) => snapshot.messageId === value || snapshot.treeOID === value);
 }
 
 /**

@@ -9,13 +9,15 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
-import { diffSnapshotAgainstWorktree, listSnapshots } from "../snapshot.ts";
+import { diffSnapshotAgainstWorktree, resolveSnapshotSelector } from "../snapshot.ts";
 
 const checkpointChangesSchema = Type.Object({
-	since: Type.String({
-		description:
-			"Identifier of the snapshot to compare against. Use the snapshot's message ID (UUID) or the tree OID.",
-	}),
+	since: Type.Optional(
+		Type.String({
+			description:
+				"Snapshot selector to compare against. Supports latest, previous, numeric index, timestamp, message ID, or tree OID. Defaults to latest.",
+		}),
+	),
 	glob: Type.Optional(
 		Type.String({
 			description: "Optional glob pattern to restrict the diff to matching files (e.g. '*.ts', 'src/**').",
@@ -53,17 +55,8 @@ export function createCheckpointChangesToolDefinition(
 			_ctx: ExtensionContext,
 		): Promise<AgentToolResult<unknown>> => {
 			try {
-				// Resolve the snapshot: the 'since' param can be a message ID (UUID)
-				// or a tree OID. Try to find it in the session snapshots first.
-				let fromTreeOID = params.since;
-
-				const snapshots = listSnapshots(cwd, sessionId);
-				const matchingSnapshot = snapshots.find((s) => s.messageId === params.since || s.treeOID === params.since);
-				if (matchingSnapshot) {
-					fromTreeOID = matchingSnapshot.treeOID;
-				}
-
-				if (snapshots.length === 0) {
+				const snapshot = resolveSnapshotSelector(cwd, sessionId, params.since);
+				if (!snapshot) {
 					return {
 						content: [{ type: "text" as const, text: "No snapshots available for this session." }],
 						details: { since: params.since },
@@ -71,12 +64,12 @@ export function createCheckpointChangesToolDefinition(
 				}
 
 				// Compare against the current worktree to capture mid-turn changes
-				const { changedFiles, diff } = diffSnapshotAgainstWorktree(cwd, fromTreeOID, params.glob);
+				const { changedFiles, diff } = diffSnapshotAgainstWorktree(cwd, snapshot.treeOID, params.glob);
 
 				if (changedFiles.length === 0) {
 					return {
 						content: [{ type: "text" as const, text: "No files changed since the specified snapshot." }],
-						details: { since: params.since, treeOID: fromTreeOID },
+						details: { since: params.since ?? "latest", snapshot },
 					};
 				}
 
@@ -85,13 +78,13 @@ export function createCheckpointChangesToolDefinition(
 
 				return {
 					content: [{ type: "text" as const, text: `${summary}${diffText}` }],
-					details: { since: params.since, treeOID: fromTreeOID, changedFiles },
+					details: { since: params.since ?? "latest", snapshot, changedFiles },
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [{ type: "text" as const, text: `Failed to get checkpoint changes: ${message}` }],
-					details: { since: params.since, error: message },
+					details: { since: params.since ?? "latest", error: message },
 				};
 			}
 		},
