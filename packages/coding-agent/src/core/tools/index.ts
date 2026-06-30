@@ -60,6 +60,8 @@ export {
 	truncateLine,
 	truncateTail,
 } from "./truncate.ts";
+export { createWebFetchToolDefinition, type WebFetchInput } from "./web-fetch.ts";
+export { createWebSearchToolDefinition, type WebSearchInput } from "./web-search.ts";
 export {
 	createWriteTool,
 	createWriteToolDefinition,
