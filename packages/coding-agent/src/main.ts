@@ -43,11 +43,14 @@ import { assertValidSessionId, SessionManager } from "./core/session-manager.ts"
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
+import { runDaemonMode } from "./daemon/daemon-mode.ts";
+import { handleDaemonClientCommand, parseDaemonCommand } from "./daemon-cli.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { InteractiveMode, runPrintMode, runRpcMode, runServeMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { handleSessionsCommand } from "./sessions-cli.ts";
+import { handleTasteCommand } from "./taste-cli.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
@@ -97,6 +100,17 @@ function reportDiagnostics(diagnostics: readonly AgentSessionRuntimeDiagnostic[]
 function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
 	return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+}
+
+function takeFlagValue(args: string[], name: string): string | undefined {
+	const index = args.indexOf(name);
+	if (index === -1) return undefined;
+	const value = args[index + 1];
+	if (!value || value.startsWith("-")) {
+		throw new Error(`${name} requires a value`);
+	}
+	args.splice(index, 2);
+	return value;
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
@@ -474,7 +488,48 @@ export interface MainOptions {
 
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
-	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+	let effectiveArgs = [...args];
+	const daemonCommand = parseDaemonCommand(effectiveArgs);
+	if (await handleTasteCommand(effectiveArgs)) {
+		return;
+	}
+	if (await handleDaemonClientCommand(daemonCommand)) {
+		return;
+	}
+
+	let startDaemon = false;
+	let daemonSocketPath: string | undefined;
+	if (daemonCommand.kind === "start") {
+		startDaemon = true;
+		daemonSocketPath = daemonCommand.socketPath;
+		effectiveArgs = daemonCommand.remainingArgs;
+	}
+
+	let startServe = false;
+	let servePort = 3141;
+	let serveHost = "127.0.0.1";
+	if (effectiveArgs[0] === "serve") {
+		startServe = true;
+		effectiveArgs = effectiveArgs.slice(1);
+		const port = takeFlagValue(effectiveArgs, "--port");
+		const host = takeFlagValue(effectiveArgs, "--host");
+		if (port) {
+			const parsedPort = Number.parseInt(port, 10);
+			if (!Number.isFinite(parsedPort) || parsedPort <= 0) {
+				throw new Error(`Invalid --port value: ${port}`);
+			}
+			servePort = parsedPort;
+		}
+		if (host) {
+			serveHost = host;
+		}
+	}
+
+	if (effectiveArgs[0] === "headless") {
+		effectiveArgs = ["--mode", "rpc", ...effectiveArgs.slice(1)];
+	}
+
+	const offlineMode = effectiveArgs.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
 	if (offlineMode) {
 		process.env.PI_OFFLINE = "1";
 		process.env.PI_SKIP_VERSION_CHECK = "1";
@@ -490,9 +545,9 @@ export async function main(args: string[], options?: MainOptions) {
 	applyHttpProxySettings(bootstrapSettingsManager.getGlobalSettings().httpProxy);
 	configureHttpDispatcher();
 
-	if (await handlePackageCommand(args, { extensionFactories: options?.extensionFactories })) {
+	if (await handlePackageCommand(effectiveArgs, { extensionFactories: options?.extensionFactories })) {
 		const exitCode = process.exitCode ?? 0;
-		if (process.platform === "win32" && exitCode === 0 && args[0] === "update") {
+		if (process.platform === "win32" && exitCode === 0 && effectiveArgs[0] === "update") {
 			// We normally prefer process.exit(0) for package commands so bad extensions cannot keep
 			// one-shot commands alive. On Windows, Node can assert after fetch() if process.exit(0)
 			// runs during teardown; let successful `pi update` drain naturally instead.
@@ -503,15 +558,15 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	if (await handleConfigCommand(args, { extensionFactories: options?.extensionFactories })) {
+	if (await handleConfigCommand(effectiveArgs, { extensionFactories: options?.extensionFactories })) {
 		return;
 	}
 
-	if (await handleSessionsCommand(args)) {
+	if (await handleSessionsCommand(effectiveArgs)) {
 		process.exit(process.exitCode ?? 0);
 	}
 
-	const parsed = parseArgs(args);
+	const parsed = parseArgs(effectiveArgs);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -744,6 +799,16 @@ export async function main(args: string[], options?: MainOptions) {
 		};
 	};
 	time("createRuntime");
+	if (startDaemon) {
+		printTimings();
+		await runDaemonMode(createRuntime, {
+			agentDir,
+			defaultCwd: sessionManager.getCwd(),
+			sessionDir: parsed.sessionDir,
+			socketPath: daemonSocketPath,
+		});
+		return;
+	}
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd: sessionManager.getCwd(),
 		agentDir,
@@ -767,6 +832,16 @@ export async function main(args: string[], options?: MainOptions) {
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRegistry, searchPattern);
 		process.exit(0);
+	}
+
+	if (startServe) {
+		reportDiagnostics(runtime.diagnostics);
+		if (runtime.diagnostics.some((diagnostic) => diagnostic.type === "error")) {
+			process.exit(1);
+		}
+		printTimings();
+		await runServeMode(runtime, { port: servePort, host: serveHost });
+		return;
 	}
 
 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
