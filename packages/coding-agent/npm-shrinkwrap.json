@@ -11,6 +11,7 @@
 			"dependencies": {
 				"@earendil-works/pi-agent-core": "^0.80.2",
 				"@earendil-works/pi-ai": "^0.80.2",
+				"@earendil-works/pi-event-core": "^0.80.2",
 				"@earendil-works/pi-tui": "^0.80.2",
 				"@silvia-odwyer/photon-node": "0.3.4",
 				"chalk": "5.6.2",
@@ -507,6 +508,14 @@
 			"bin": {
 				"pi-ai": "./dist/cli.js"
 			},
+			"engines": {
+				"node": ">=22.19.0"
+			}
+		},
+		"node_modules/@earendil-works/pi-event-core": {
+			"version": "0.80.2",
+			"resolved": "https://registry.npmjs.org/@earendil-works/pi-event-core/-/pi-event-core-0.80.2.tgz",
+			"license": "MIT",
 			"engines": {
 				"node": ">=22.19.0"
 			}
