@@ -13,13 +13,14 @@ import {
 	createSnapshot,
 	diffSnapshotAgainstWorktree,
 	isGitRepo,
+	isSafeVcsWorkspace,
 	listSnapshots,
 	restoreSnapshot,
 } from "../src/core/snapshot.ts";
 
 /** Create a minimal git repo at a temp location and return the path. */
 function createTempGitRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-snapshot-test-"));
+	const dir = mkdtempSync(join(process.env.HOME ?? tmpdir(), "pi-snapshot-test-"));
 	mkdirSync(join(dir, "subdir"), { recursive: true });
 
 	// Init git
@@ -48,6 +49,24 @@ describe("isGitRepo", () => {
 
 	it("returns false for a non-git directory", () => {
 		expect(isGitRepo("/tmp")).toBe(false);
+	});
+});
+
+describe("isSafeVcsWorkspace", () => {
+	it("requires the workspace to be below HOME", () => {
+		const originalHome = process.env.HOME;
+		const home = mkdtempSync(join(tmpdir(), "pi-home-"));
+		const outside = mkdtempSync(join(tmpdir(), "pi-outside-longer-than-home-"));
+		try {
+			process.env.HOME = home;
+			expect(isSafeVcsWorkspace(home)).toBe(false);
+			expect(isSafeVcsWorkspace(join(home, "project"))).toBe(true);
+			expect(isSafeVcsWorkspace(outside)).toBe(false);
+		} finally {
+			process.env.HOME = originalHome;
+			rmSync(home, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
 	});
 });
 

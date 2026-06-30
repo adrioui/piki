@@ -170,6 +170,35 @@ describe("AgentSession retry", () => {
 		expect(created.session.isRetrying).toBe(false);
 	});
 
+	it("session waitForIdle waits through retry backoff and continuation", async () => {
+		const created = createSession({ failCount: 1 });
+
+		const promptPromise = created.session.prompt("Test");
+		await created.session.waitForIdle();
+		await promptPromise;
+
+		expect(created.getCallCount()).toBe(2);
+		expect(created.session.isRetrying).toBe(false);
+	});
+
+	it("does not emit extension agent_end before auto-retry continuation", async () => {
+		const created = createSession({ failCount: 1 });
+		let extensionAgentEndCount = 0;
+		const sessionWithHook = created.session as unknown as SessionWithExtensionEmitHook;
+		const original = sessionWithHook._emitExtensionEvent.bind(sessionWithHook);
+		sessionWithHook._emitExtensionEvent = async (event: AgentEvent) => {
+			if (event.type === "agent_end") {
+				extensionAgentEndCount++;
+			}
+			await original(event);
+		};
+
+		await created.session.prompt("Test");
+
+		expect(created.getCallCount()).toBe(2);
+		expect(extensionAgentEndCount).toBe(1);
+	});
+
 	it("retries provider network_error failures", async () => {
 		const created = createSession({ failCount: 0 });
 		let callCount = 0;
