@@ -187,10 +187,17 @@ export class JsonTokenizer {
 
 	private feedStringChar(char: string): void {
 		if (this.unicodeBuffer.length > 0) {
-			this.stringBuffer += char;
-			this.unicodeBuffer += char;
-			if (this.unicodeBuffer.length === 4) {
+			const next = this.unicodeBuffer === "u" ? char : this.unicodeBuffer + char;
+			if (!/^[0-9a-fA-F]{1,4}$/.test(next)) {
+				this.stringBuffer += `\\u${this.unicodeBuffer === "u" ? "" : this.unicodeBuffer}${char}`;
 				this.unicodeBuffer = "";
+				return;
+			}
+			if (next.length === 4) {
+				this.stringBuffer += String.fromCharCode(Number.parseInt(next, 16));
+				this.unicodeBuffer = "";
+			} else {
+				this.unicodeBuffer = next;
 			}
 			return;
 		}
@@ -198,7 +205,6 @@ export class JsonTokenizer {
 		if (this.escapeNext) {
 			if (char === "u") {
 				this.unicodeBuffer = "u";
-				this.stringBuffer += char;
 			} else {
 				this.stringBuffer += JSON_ESCAPE_MAP[char] ?? char;
 			}
@@ -207,7 +213,6 @@ export class JsonTokenizer {
 		}
 
 		if (char === "\\") {
-			this.stringBuffer += char;
 			this.escapeNext = true;
 			return;
 		}

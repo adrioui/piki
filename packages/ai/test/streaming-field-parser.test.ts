@@ -38,6 +38,12 @@ describe("StreamingFieldParser", () => {
 		expect(parser.partial).toEqual({ items: [1, 2, 3] });
 	});
 
+	it("decodes JSON string escapes while streaming", () => {
+		const parser = new StreamingFieldParser();
+		parser.push('{"msg":"hello\\tworld\\n","letter":"\\u0041"}');
+		expect(parser.partial).toEqual({ msg: "hello\tworld\n", letter: "A" });
+	});
+
 	it("snapshot and restore", () => {
 		const parser = new StreamingFieldParser();
 		parser.push('{"name":"test"');
@@ -81,6 +87,19 @@ describe("StreamingFieldParser", () => {
 		const result = validatePartialAgainstSchema({ count: "1" }, schema);
 		expect(result.valid).toBe(false);
 		expect(result.issue).toContain("expected type number");
+	});
+
+	it("validates Type.Tuple fields positionally", () => {
+		const schema = typeboxToStreamingSchema(Type.Object({ pair: Type.Tuple([Type.String(), Type.Number()]) }));
+		expect(validatePartialAgainstSchema({ pair: ["name", 1] }, schema).valid).toBe(true);
+
+		const wrongType = validatePartialAgainstSchema({ pair: ["name", "1"] }, schema);
+		expect(wrongType.valid).toBe(false);
+		expect(wrongType.fieldPath).toBe("pair[1]");
+
+		const tooLong = validatePartialAgainstSchema({ pair: ["name", 1, true] }, schema);
+		expect(tooLong.valid).toBe(false);
+		expect(tooLong.issue).toContain("expected tuple length 2");
 	});
 
 	it("includes field path for nested validation errors", () => {
@@ -153,5 +172,11 @@ describe("typeboxToGbnf", () => {
 	it("wraps boolean alternatives when embedded", () => {
 		const gbnf = typeboxToGbnf(Type.Object({ enabled: Type.Boolean() }));
 		expect(gbnf).toContain('("true" | "false")');
+	});
+
+	it("falls back to JSON value for unknown primitive schema types", () => {
+		const gbnf = typeboxToGbnf({ type: "constructor" } as never);
+		expect(gbnf).toContain("root ::= value");
+		expect(gbnf).toContain("value ::= string | number");
 	});
 });

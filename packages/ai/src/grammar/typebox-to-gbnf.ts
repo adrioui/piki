@@ -210,7 +210,8 @@ function compilePrimitive(type: string | string[] | undefined, _schema: TSchema,
 			markPrimitive(ctx, "value");
 			return "value";
 		default:
-			return '""';
+			markPrimitive(ctx, "value");
+			return "value";
 	}
 }
 

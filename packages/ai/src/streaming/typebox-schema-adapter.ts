@@ -20,6 +20,7 @@ export interface StreamingSchemaField {
 	required: boolean;
 	children?: StreamingSchemaField[];
 	itemSchema?: StreamingSchemaField;
+	tupleItems?: StreamingSchemaField[];
 	additionalProperties?: StreamingSchemaField;
 	enumValues?: string[];
 }
@@ -73,7 +74,15 @@ export function typeboxToStreamingSchema(
 	}
 
 	if (type === "array" || (schema as { items?: unknown }).items) {
-		const items = (schema as { items?: TSchema }).items;
+		const items = (schema as { items?: TSchema | TSchema[] }).items;
+		if (Array.isArray(items)) {
+			return {
+				name,
+				type: "array",
+				required,
+				tupleItems: items.map((item, index) => typeboxToStreamingSchema(item, `${name}[${index}]`)),
+			};
+		}
 		return {
 			name,
 			type: "array",
@@ -196,6 +205,26 @@ export function validatePartialAgainstSchema(
 					};
 				}
 			}
+		}
+		return { valid: true };
+	}
+
+	if (schema.type === "array" && schema.tupleItems) {
+		if (!Array.isArray(partial)) {
+			return { valid: false, issue: `Field "${path}" expected type array`, fieldPath: path };
+		}
+		if (partial.length > schema.tupleItems.length) {
+			return {
+				valid: false,
+				issue: `Field "${path}" expected tuple length ${schema.tupleItems.length}`,
+				fieldPath: path,
+			};
+		}
+		for (let i = 0; i < partial.length; i++) {
+			const itemSchema = schema.tupleItems[i];
+			if (!itemSchema) continue;
+			const result = validatePartialAgainstSchema(partial[i], itemSchema, `${path}[${i}]`);
+			if (!result.valid) return result;
 		}
 		return { valid: true };
 	}
