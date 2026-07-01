@@ -33,6 +33,20 @@ export interface WorkerExecutorOptions {
 	onWorkerError: (error: { error: string; forkId: string; agentId: string }) => void;
 }
 
+/**
+ * Global registry for the currently active WorkerExecutor instance.
+ * Allows detached process tracking to register PIDs with the correct fork.
+ */
+let activeWorkerExecutor: WorkerExecutor | undefined;
+
+/**
+ * Set the fork context for detached process tracking.
+ * Called when a worker tool starts executing in a fork context.
+ */
+export function setForkContext(forkId: string | undefined): void {
+	activeWorkerExecutor?._setCurrentFork(forkId);
+}
+
 export class WorkerExecutor {
 	private readonly workers = new Map<string, WorkerSession>();
 	private readonly forkWorkers = new Map<string, Set<string>>();
@@ -40,9 +54,33 @@ export class WorkerExecutor {
 	private readonly intentionallyKilled = new Set<string>();
 	private readonly detachedRegistry = new DetachedProcessRegistry();
 	private readonly options: WorkerExecutorOptions;
+	private currentForkId: string | undefined;
+
+	/** Register a detached process PID for the current fork. */
+	registerDetachedPid(pid: number, outputPath?: string): void {
+		if (this.currentForkId) {
+			this.detachedRegistry.register(pid, this.currentForkId, { outputPath });
+		}
+	}
+
+	/** Unregister a detached process PID. */
+	unregisterDetachedPid(pid: number): void {
+		this.detachedRegistry.unregister(pid);
+	}
+
+	/** Get the DetachedProcessRegistry for external use. */
+	getDetachedProcessRegistry(): DetachedProcessRegistry {
+		return this.detachedRegistry;
+	}
+
+	/** Set the current fork context for detached process registration. */
+	_setCurrentFork(forkId: string | undefined): void {
+		this.currentForkId = forkId;
+	}
 
 	constructor(options: WorkerExecutorOptions) {
 		this.options = options;
+		activeWorkerExecutor = this;
 	}
 
 	asRole(): RoleDefinition<RuntimeEvent> {
@@ -97,7 +135,7 @@ export class WorkerExecutor {
 			filteredTools = filterToolsForRole(role, allTools);
 			const projectContext = this.options.getProjectContext();
 			context = buildWorkerContext({
-				sessionStart: payload.message ?? payload.context ?? "",
+				sessionStart: "",
 				projectContext,
 				transcript: this.options.getTranscript(),
 			});
@@ -129,6 +167,7 @@ export class WorkerExecutor {
 					role,
 				}),
 			onFinished: (result) => {
+				if (this.intentionallyKilled.delete(agentId)) return;
 				this.cleanupWorker(forkId, agentId);
 				this.options.onWorkerFinished({ ...result, role });
 			},
@@ -191,7 +230,12 @@ export class WorkerExecutor {
 
 	private cleanupWorker(forkId: string, agentId: string): void {
 		this.workers.delete(agentId);
-		this.forkWorkers.get(forkId)?.delete(agentId);
+		this.pendingMessages.delete(agentId);
+		const forkSet = this.forkWorkers.get(forkId);
+		if (forkSet) {
+			forkSet.delete(agentId);
+			if (forkSet.size === 0) this.forkWorkers.delete(forkId);
+		}
 		this.options.forkedProjectionStore?.removeFork(forkId);
 	}
 
@@ -226,5 +270,23 @@ export class WorkerExecutor {
 		this.intentionallyKilled.clear();
 		this.detachedRegistry.dispose();
 		this.forkWorkers.clear();
+		if (activeWorkerExecutor === this) {
+			activeWorkerExecutor = undefined;
+		}
 	}
+}
+
+/**
+ * Register a detached process PID with the active worker executor (if any).
+ * Called from trackDetachedChildPid to enable per-fork process killing.
+ */
+export function registerDetachedProcessWithExecutor(pid: number, outputPath?: string): void {
+	activeWorkerExecutor?.registerDetachedPid(pid, outputPath);
+}
+
+/**
+ * Unregister a detached process PID from the active worker executor (if any).
+ */
+export function unregisterDetachedProcessFromExecutor(pid: number): void {
+	activeWorkerExecutor?.unregisterDetachedPid(pid);
 }

@@ -33,7 +33,7 @@ import { ForkRuntime } from "./fork-runtime.ts";
 import { verifyGoal } from "./goal-verifier.ts";
 import { COORDINATOR_ON_IDLE, COORDINATOR_ON_SPAWN } from "./role-prompts/lifecycle-hooks.ts";
 import { JUSTIFICATION_TEMPLATES, JUSTIFICATION_VALUES } from "./role-prompts/observer.ts";
-import { WORKER_BASE_PROMPT } from "./role-prompts/worker-base.ts";
+import { getSystemPrompt } from "./role-prompts/worker-base.ts";
 import { createCheckpointId, createSnapshot, isGitRepo } from "./snapshot.ts";
 import { TasteProfileStore, type TasteSignalType } from "./taste.ts";
 import { type OverthinkingInfo, ThinkingGovernor } from "./thinking-governor.ts";
@@ -169,7 +169,8 @@ function textFromMessage(message: AgentMessage): string {
 				if (part.type === "text" && "text" in part) {
 					parts.push(String(part.text));
 				} else if (part.type === "toolCall" && "name" in part) {
-					const args = "arguments" in part ? JSON.stringify(part.arguments).slice(0, 500) : "";
+					const argsRaw = "arguments" in part ? JSON.stringify(part.arguments) : "";
+					const args = argsRaw.length > 500 ? `${argsRaw.slice(0, 500)}[...truncated]` : argsRaw;
 					parts.push(`[called tool: ${String(part.name)}(${args})]`);
 				}
 			}
@@ -215,7 +216,32 @@ function collectGitState(cwd: string): Record<string, unknown> | undefined {
 }
 
 function collectFolderStructure(cwd: string): string {
-	return safeExec(cwd, "git", ["ls-files"])?.split("\n").slice(0, 200).join("\n") ?? "";
+	const tracked = safeExec(cwd, "git", ["ls-files"])?.split("\n").filter(Boolean) ?? [];
+	const untracked =
+		safeExec(cwd, "git", ["ls-files", "--others", "--exclude-standard"])?.split("\n").filter(Boolean) ?? [];
+	const allFiles = [...tracked, ...untracked];
+	if (allFiles.length <= 200) return allFiles.join("\n");
+	// Knapsack: prioritize by depth (shallower = more important), then by file type
+	const scored = allFiles.map((f) => {
+		const depth = f.split("/").length;
+		const ext = f.split(".").pop() ?? "";
+		const isSource = /^(ts|js|py|go|rs|java|rb|cpp|c|json|yaml|yml|toml|md)$/.test(ext);
+		const isConfig = /^(lock|toml|yaml|yml|json|ini|cfg)$/.test(ext);
+		// Score: lower depth = higher priority, source files preferred
+		const score = (20 - Math.min(depth, 20)) * 10 + (isSource ? 50 : 0) + (isConfig ? 20 : 0);
+		return { path: f, score, cost: f.length + 1 };
+	});
+	scored.sort((a, b) => b.score - a.score);
+	// Token budget: ~8000 chars for folder structure
+	const budget = 8000;
+	let used = 0;
+	const selected: string[] = [];
+	for (const item of scored) {
+		if (used + item.cost > budget) break;
+		selected.push(item.path);
+		used += item.cost;
+	}
+	return selected.join("\n");
 }
 
 function collectAgentsFile(cwd: string): string | undefined {
@@ -448,6 +474,7 @@ export class SessionOrchestrator {
 	private previousGitStatus: string | undefined;
 	private readonly streamingParsers = new Map<string, StreamingFieldParser>();
 	private workerExecutor: WorkerExecutor | undefined;
+	private errorPublishingDepth = 0;
 
 	constructor(session: AgentSession, services: AgentSessionServices) {
 		this.session = session;
@@ -536,17 +563,7 @@ export class SessionOrchestrator {
 					const resolver = new AgentModelResolver(this.services);
 					return resolver.resolve(role) as Model<string> | undefined;
 				},
-				getSystemPrompt: (role: string) => {
-					const prompts: Record<string, string> = {
-						scout: "Investigate the assigned area and report concrete findings.",
-						architect: "Design a solution and report the plan, tradeoffs, and risks.",
-						engineer: "Implement the assigned change and report files changed plus verification.",
-						critic: "Review the assigned work and report correctness or quality issues.",
-						scientist: "Diagnose the assigned problem and report evidence-backed findings.",
-						artisan: "Create the assigned content or artifact and report completion details.",
-					};
-					return `${WORKER_BASE_PROMPT}\n\n## Your role\n${prompts[role] ?? "Complete the assigned task."}`;
-				},
+				getSystemPrompt: (role: string) => getSystemPrompt(role),
 				getAllTools: () => this.session.getExecutableWorkerTools(),
 				getProjectContext: () => collectFolderStructure(this.session.sessionManager.getCwd()),
 				getTranscript: () =>
@@ -564,9 +581,7 @@ export class SessionOrchestrator {
 						forkId: result.forkId,
 						role: result.role,
 						result: result.text,
-					})
-						.catch(() => {})
-						.finally(() => this.forkedProjectionStore.removeFork(result.forkId));
+					}).catch(() => {});
 					void this.session
 						.sendCustomMessage(
 							{
@@ -596,9 +611,7 @@ export class SessionOrchestrator {
 						agentId: error.agentId,
 						forkId: error.forkId,
 						error: error.error,
-					})
-						.catch(() => {})
-						.finally(() => this.forkedProjectionStore.removeFork(error.forkId));
+					}).catch(() => {});
 				},
 			});
 			this.sink.registerRole(this.workerExecutor.asRole());
@@ -725,7 +738,7 @@ export class SessionOrchestrator {
 		const observerRole: RoleDefinition<RuntimeEvent> = {
 			name: "observer",
 			match: (event) => event.type === "session.agent_ended" && event.payload.willRetry !== true,
-			run: async ({ publish, projections, signal }) => {
+			run: async ({ projections, signal }) => {
 				const overview = projections.get<SessionOverviewProjection>("overview");
 				const transcript = projections.get<TranscriptProjection>("transcript");
 				if (!overview) return;
@@ -788,21 +801,17 @@ export class SessionOrchestrator {
 					}
 				}
 				const template = JUSTIFICATION_TEMPLATES[assessment.justification as JustificationValue];
-				await publish(
-					createRuntimeEvent(this.session, "session.observer_assessed", this.sequence + 1, {
-						...assessment,
-						message: assessment.escalate ? `<escalation_required>\n${template}\n</escalation_required>` : "pass",
-					}),
-				);
-				await publish(
-					createRuntimeEvent(this.session, "observation", this.sequence + 2, {
-						difficulty: assessment.difficulty,
-						churn: assessment.churn,
-						frustration: assessment.frustration,
-						escalate: assessment.escalate,
-						justification: assessment.justification,
-					}),
-				);
+				await this.publishRuntimeEvent("session.observer_assessed", {
+					...assessment,
+					message: assessment.escalate ? `<escalation_required>\n${template}\n</escalation_required>` : "pass",
+				});
+				await this.publishRuntimeEvent("observation", {
+					difficulty: assessment.difficulty,
+					churn: assessment.churn,
+					frustration: assessment.frustration,
+					escalate: assessment.escalate,
+					justification: assessment.justification,
+				});
 			},
 		};
 
@@ -1403,10 +1412,13 @@ export class SessionOrchestrator {
 	private async publishInternal(event: RuntimeEvent): Promise<void> {
 		await this.sink.publish(event);
 		void this.sink.waitForIdle().catch((error) => {
-			void this.publishRuntimeEvent("session.role_error", {
-				eventType: event.type,
-				error: error instanceof Error ? error.message : String(error),
-			});
+			if (this.errorPublishingDepth < 3) {
+				this.errorPublishingDepth++;
+				void this.publishRuntimeEvent("session.role_error", {
+					eventType: event.type,
+					error: error instanceof Error ? error.message : String(error),
+				}).finally(() => this.errorPublishingDepth--);
+			}
 		});
 	}
 

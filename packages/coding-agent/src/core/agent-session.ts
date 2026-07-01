@@ -2997,7 +2997,7 @@ export class AgentSession {
 				["messageAdvisor", createMessageAdvisorToolDefinition()],
 			] as const;
 			for (const [toolName, toolDef] of roleTools) {
-				if (!isAllowedTool(toolName)) continue;
+				if (!isAllowedBuiltinAddon(toolName)) continue;
 				this._toolDefinitions.set(toolName, {
 					definition: toolDef,
 					sourceInfo: createSyntheticSourceInfo(`<builtin:${toolName}>`, {
