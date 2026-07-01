@@ -85,22 +85,39 @@ export function isSafeVcsWorkspace(workspaceRoot: string): boolean {
 export function shouldEnableGitTracking(workspaceRoot: string): boolean {
 	if (!isSafeVcsWorkspace(workspaceRoot) || !isGitRepo(workspaceRoot)) return false;
 	try {
-		const count = Number.parseInt(
-			execFileSync("git", ["ls-files"], { cwd: workspaceRoot, encoding: "utf-8", stdio: "pipe" })
-				.trim()
-				.split("\n")
-				.filter(Boolean)
-				.length.toString(),
-			10,
-		);
-		if (count > 50000) {
-			console.warn(`VCS tracking disabled for large repo (${count} files > 50000 threshold)`);
+		const count = countTrackedFiles(workspaceRoot);
+		if (count > 100000) {
+			console.warn(`VCS tracking disabled for large repo (${count} files > 100000 threshold)`);
 			return false;
 		}
-		return count <= 100000;
+		if (count > 50000) {
+			console.warn(`VCS tracking enabled with warning for large repo (${count} files)`);
+		}
+		return true;
 	} catch {
 		return false;
 	}
+}
+
+function countTrackedFiles(workspaceRoot: string): number {
+	try {
+		const output = execFileSync("git", ["ls-files", "--count"], {
+			cwd: workspaceRoot,
+			encoding: "utf-8",
+			stdio: "pipe",
+		}).trim();
+		const count = Number.parseInt(output, 10);
+		if (Number.isFinite(count)) return count;
+	} catch {
+		// Fall back for older Git versions.
+	}
+	const output = execFileSync("git", ["ls-files"], {
+		cwd: workspaceRoot,
+		encoding: "utf-8",
+		stdio: "pipe",
+		maxBuffer: 10 * 1024 * 1024,
+	});
+	return output.trim().split("\n").filter(Boolean).length;
 }
 
 /**
@@ -116,6 +133,9 @@ export function shouldEnableGitTracking(workspaceRoot: string): boolean {
  */
 export function createSnapshot(workspaceRoot: string, sessionId: string, messageId: string): string | null {
 	if (!shouldEnableGitTracking(workspaceRoot)) {
+		return null;
+	}
+	if (!isSafeRefSegment(sessionId) || !isSafeRefSegment(messageId)) {
 		return null;
 	}
 
@@ -207,21 +227,49 @@ function cryptoRandomSuffix(): string {
  * 2. Uses `git checkout --no-overlay <treeOID> -- <path ?? ".">` to reset tracked changes.
  */
 export function restoreSnapshot(workspaceRoot: string, treeOID: string, path?: string): void {
-	const checkoutPath = path || ".";
-	// Remove untracked files not in the snapshot, except .git and pi internal dirs
-	try {
-		const cleanArgs = ["clean", "-f", "-e", ".git", "-e", ".pi"];
-		if (checkoutPath !== ".") {
-			cleanArgs.push("--", checkoutPath);
-		}
-		execFileSync("git", cleanArgs, { cwd: workspaceRoot, stdio: "pipe" });
-	} catch {
-		// Ignore clean errors; checkout will still overwrite tracked files
+	if (!isValidTreeOid(workspaceRoot, treeOID)) {
+		throw new Error("Invalid snapshot tree object");
 	}
+	const checkoutPath = normalizeRestorePath(path);
+	const cleanArgs = ["clean", "-fd", "-e", ".pi"];
+	if (checkoutPath !== ".") {
+		cleanArgs.push("--", checkoutPath);
+	}
+	execFileSync("git", cleanArgs, {
+		cwd: workspaceRoot,
+		stdio: "pipe",
+	});
 	execFileSync("git", ["checkout", "--no-overlay", treeOID, "--", checkoutPath], {
 		cwd: workspaceRoot,
 		stdio: "pipe",
 	});
+}
+
+function normalizeRestorePath(path: string | undefined): string {
+	if (!path) return ".";
+	if (path === "." || path === "./") return ".";
+	if (isAbsolute(path) || path.includes("..") || path.startsWith(":(") || path.trim() === "") {
+		throw new Error(`Unsafe restore path: ${path}`);
+	}
+	return path;
+}
+
+function isSafeRefSegment(value: string): boolean {
+	return /^[A-Za-z0-9._-]+$/.test(value) && !value.startsWith(".") && !value.endsWith(".lock");
+}
+
+function isValidTreeOid(workspaceRoot: string, treeOID: string): boolean {
+	if (!/^[a-f0-9]{40,64}$/i.test(treeOID)) return false;
+	try {
+		const type = execFileSync("git", ["cat-file", "-t", treeOID], {
+			cwd: workspaceRoot,
+			stdio: "pipe",
+			encoding: "utf-8",
+		}).trim();
+		return type === "tree";
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -238,6 +286,7 @@ export function listSnapshots(
 	workspaceRoot: string,
 	sessionId: string,
 ): Array<{ messageId: string; treeOID: string; timestamp: number; index: number }> {
+	if (!isSafeRefSegment(sessionId)) return [];
 	try {
 		const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], {
 			cwd: workspaceRoot,

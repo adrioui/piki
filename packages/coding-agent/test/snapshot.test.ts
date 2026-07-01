@@ -146,7 +146,19 @@ describe("restoreSnapshot", () => {
 		expect(readFileSync(join(repoDir, "new-file.txt"), "utf-8")).toBe("temporary\n");
 	});
 
+	it("removes untracked files created after snapshot", () => {
+		const oid = createSnapshot(repoDir, "restore-test", "snap-untracked-clean");
+		expect(oid).toBeTruthy();
+
+		writeFileSync(join(repoDir, "created-after-snapshot.txt"), "untracked\n");
+
+		restoreSnapshot(repoDir, oid!);
+
+		expect(() => readFileSync(join(repoDir, "created-after-snapshot.txt"), "utf-8")).toThrow();
+	});
+
 	it("can restore a specific path", () => {
+		mkdirSync(join(repoDir, "subdir"), { recursive: true });
 		writeFileSync(join(repoDir, "subdir/other.txt"), "nested content\n");
 		execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "pipe" });
 		execFileSync("git", ["commit", "-m", "Add nested"], { cwd: repoDir, stdio: "pipe" });
