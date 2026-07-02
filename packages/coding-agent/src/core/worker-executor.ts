@@ -15,6 +15,7 @@ import type { EventEnvelope, ForkedProjectionStore, RoleDefinition } from "@eare
 import { DetachedProcessRegistry } from "./detached-process-registry.ts";
 import type { PermissionRule } from "./permissions/permission-gate.ts";
 import { buildWorkerContext } from "./worker-context-builder.ts";
+import { WorkerEffectRuntime } from "./worker-effect-runtime.ts";
 import { WorkerSession, type WorkerTool } from "./worker-session.ts";
 import { filterToolsForRole } from "./worker-tools.ts";
 
@@ -56,9 +57,10 @@ export function setForkContext(forkId: string | undefined): void {
 export class WorkerExecutor {
 	private readonly workers = new Map<string, WorkerSession>();
 	private readonly forkWorkers = new Map<string, Set<string>>();
-	private readonly pendingMessages = new Map<string, string[]>();
 	private readonly intentionallyKilled = new Set<string>();
+	private readonly finalizedWorkers = new Set<string>();
 	private readonly detachedRegistry = new DetachedProcessRegistry();
+	private readonly runtime = new WorkerEffectRuntime();
 	private readonly options: WorkerExecutorOptions;
 	private currentForkId: string | undefined;
 
@@ -174,24 +176,14 @@ export class WorkerExecutor {
 					role,
 				}),
 			onFinished: (result) => {
-				const killed = this.intentionallyKilled.delete(agentId);
-				void this.options.publishEvent("fork_cleaned", {
-					forkId,
-					agentId,
-					reason: killed ? "killed" : "finished",
-				});
-				this.cleanupWorker(forkId, agentId);
+				const killed = this.isKilled(agentId);
+				void this.finalizeWorker(forkId, agentId, killed ? "killed" : "finished");
 				if (killed) return;
 				this.options.onWorkerFinished({ ...result, role });
 			},
 			onError: (error) => {
-				const killed = this.intentionallyKilled.delete(agentId);
-				void this.options.publishEvent("fork_cleaned", {
-					forkId,
-					agentId,
-					reason: killed ? "killed" : "error",
-				});
-				this.cleanupWorker(forkId, agentId);
+				const killed = this.isKilled(agentId);
+				void this.finalizeWorker(forkId, agentId, killed ? "killed" : "error");
 				if (killed) return;
 				this.options.onWorkerError({ ...error, role });
 			},
@@ -204,18 +196,12 @@ export class WorkerExecutor {
 			this.forkWorkers.set(forkId, forkSet);
 		}
 		forkSet.add(agentId);
-		const pending = this.pendingMessages.get(agentId);
-		if (pending) {
-			for (const message of pending) {
-				session.deliverMessage(message);
-			}
-			this.pendingMessages.delete(agentId);
-		}
+		await this.runtime.drainMessages(agentId, (message) => session.deliverMessage(message));
 
-		void session.start().catch((err) => {
-			void this.options.publishEvent("fork_cleaned", { forkId, agentId, reason: "error" });
-			this.cleanupWorker(forkId, agentId);
-			if (this.intentionallyKilled.delete(agentId)) return;
+		this.runtime.startSession(agentId, session, (err) => {
+			const killed = this.isKilled(agentId);
+			void this.finalizeWorker(forkId, agentId, killed ? "killed" : "error");
+			if (killed) return;
 			this.options.onWorkerError({
 				error: `Worker session crashed: ${err instanceof Error ? err.message : String(err)}`,
 				forkId,
@@ -232,9 +218,7 @@ export class WorkerExecutor {
 			session.deliverMessage(payload.message);
 			return;
 		}
-		const queue = this.pendingMessages.get(payload.workerId) ?? [];
-		queue.push(payload.message);
-		this.pendingMessages.set(payload.workerId, queue);
+		await this.runtime.offerMessage(payload.workerId, payload.message);
 	}
 
 	private async onWorkerKilled(event: RuntimeEvent): Promise<void> {
@@ -244,13 +228,33 @@ export class WorkerExecutor {
 			return;
 		}
 		this.intentionallyKilled.add(payload.agentId);
-		session.kill();
+		await this.runtime.killSession(payload.agentId, session);
 		this.detachedRegistry.killAll(payload.forkId);
+	}
+
+	private isKilled(agentId: string): boolean {
+		return this.intentionallyKilled.has(agentId);
+	}
+
+	private async finalizeWorker(
+		forkId: string,
+		agentId: string,
+		reason: "finished" | "error" | "killed",
+	): Promise<void> {
+		if (this.finalizedWorkers.has(agentId)) return;
+		this.finalizedWorkers.add(agentId);
+		this.intentionallyKilled.delete(agentId);
+		await this.options.publishEvent("fork_cleaned", {
+			forkId,
+			agentId,
+			reason,
+		});
+		this.cleanupWorker(forkId, agentId);
 	}
 
 	private cleanupWorker(forkId: string, agentId: string): void {
 		this.workers.delete(agentId);
-		this.pendingMessages.delete(agentId);
+		void this.runtime.removeWorker(agentId);
 		const forkSet = this.forkWorkers.get(forkId);
 		if (forkSet) {
 			forkSet.delete(agentId);
@@ -279,16 +283,14 @@ export class WorkerExecutor {
 			willRetry: false,
 		});
 		void this.options.publishEvent("fork_cleaned", { forkId, agentId, reason: "error" });
-		this.pendingMessages.delete(agentId);
+		void this.runtime.removeWorker(agentId);
 	}
 
 	dispose(): void {
-		for (const [, session] of this.workers) {
-			session.kill();
-		}
+		this.runtime.dispose(this.workers.values());
 		this.workers.clear();
-		this.pendingMessages.clear();
 		this.intentionallyKilled.clear();
+		this.finalizedWorkers.clear();
 		this.detachedRegistry.dispose();
 		this.forkWorkers.clear();
 		if (activeWorkerExecutor === this) {
