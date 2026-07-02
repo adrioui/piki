@@ -2862,6 +2862,20 @@ export class InteractiveMode {
 				return `Task assigned ${this.stringPayload(payload, "taskId") ?? ""}${this.stringPayload(payload, "assignee") ? ` → ${this.shortRuntimeId(this.stringPayload(payload, "assignee"))}` : ""}`.trim();
 			case "task.status_changed":
 				return `Task updated ${this.stringPayload(payload, "taskId") ?? ""}${this.stringPayload(payload, "status") ? ` → ${this.stringPayload(payload, "status")}` : ""}`.trim();
+			case "skill_activated":
+				return `Skill activated ${this.stringPayload(payload, "skillName") ?? this.stringPayload(payload, "skillPath") ?? ""}`.trim();
+			case "checkpoint.created":
+				return `Checkpoint created ${this.stringPayload(payload, "id") ?? ""}${this.stringPayload(payload, "kind") ? ` (${this.stringPayload(payload, "kind")})` : ""}`.trim();
+			case "autopilot_toggled":
+				return `Autopilot ${payload.enabled === true ? "enabled" : "disabled"}${reason ? ` (${reason})` : ""}`;
+			case "session.observer_assessed":
+				return `Observer assessed${payload.escalate === true ? " escalation needed" : " pass"}${this.stringPayload(payload, "justification") ? ` (${this.stringPayload(payload, "justification")})` : ""}`;
+			case "observation":
+				return `Observation${payload.escalate === true ? " escalated" : " recorded"}${this.stringPayload(payload, "justification") ? ` (${this.stringPayload(payload, "justification")})` : ""}`;
+			case "error_resolved":
+				return "Error resolved";
+			case "session.shutdown":
+				return `Session shutdown${reason ? ` (${reason})` : ""}`;
 			default:
 				return undefined;
 		}
@@ -2879,6 +2893,13 @@ export class InteractiveMode {
 			"task.created",
 			"task.assigned",
 			"task.status_changed",
+			"skill_activated",
+			"checkpoint.created",
+			"autopilot_toggled",
+			"session.observer_assessed",
+			"observation",
+			"error_resolved",
+			"session.shutdown",
 		]);
 		if (!visibleEventTypes.has(eventType)) return;
 		this.updateRuntimeWorkerTree(eventType, payload);
