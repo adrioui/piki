@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto";
 import { SPAWNABLE_ROLES } from "@earendil-works/pi-event-core";
+import { Effect, Semaphore } from "effect";
 
 export type PublishFn = (type: string, payload: Record<string, unknown>) => Promise<void>;
 
@@ -91,6 +92,7 @@ export class ForkRuntime {
 	private readonly workerForkIds = new Map<string, string>();
 	/** taskId → agentId currently assigned, so reassign can kill the prior worker. */
 	private readonly taskAssignees = new Map<string, string>();
+	private readonly mutationSemaphore = Semaphore.makeUnsafe(1);
 
 	constructor(options: ForkRuntimeOptions) {
 		this.sessionId = options.sessionId;
@@ -99,40 +101,48 @@ export class ForkRuntime {
 		this.resolveModel = options.resolveModel;
 	}
 
+	private withMutation<T>(run: () => Promise<T>): Promise<T> {
+		return Effect.runPromise(this.mutationSemaphore.withPermit(Effect.tryPromise(run)));
+	}
+
 	/**
 	 * Spawn a worker agent. Publishes an `agent_created` event.
 	 * The role must be spawnable (in SPAWNABLE_ROLES).
 	 */
 	async spawnWorker(input: SpawnWorkerInput): Promise<{ forkId: string; agentId: string }> {
-		if (!SPAWNABLE_ROLES.has(input.role)) {
-			throw new Error(`Role "${input.role}" is not spawnable. Spawnable roles: ${[...SPAWNABLE_ROLES].join(", ")}`);
-		}
-		const forkId = randomUUID();
-		const agentId = randomUUID();
-		const model = this.resolveModel?.(input.role);
-		await this.publish("agent_created", {
-			forkId,
-			parentForkId: this.sessionId,
-			agentId,
-			name: input.role,
-			role: input.role,
-			context: input.context ?? input.message ?? "",
-			mode: "spawn",
-			taskId: input.taskId,
-			message: input.message,
-			model: model ? { provider: model.provider, id: model.id } : undefined,
+		return this.withMutation(async () => {
+			if (!SPAWNABLE_ROLES.has(input.role)) {
+				throw new Error(
+					`Role "${input.role}" is not spawnable. Spawnable roles: ${[...SPAWNABLE_ROLES].join(", ")}`,
+				);
+			}
+			const forkId = randomUUID();
+			const agentId = randomUUID();
+			const model = this.resolveModel?.(input.role);
+			await this.publish("agent_created", {
+				forkId,
+				parentForkId: this.sessionId,
+				agentId,
+				name: input.role,
+				role: input.role,
+				context: input.context ?? input.message ?? "",
+				mode: "spawn",
+				taskId: input.taskId,
+				message: input.message,
+				model: model ? { provider: model.provider, id: model.id } : undefined,
+			});
+			this.workerForkIds.set(agentId, forkId);
+			if (input.taskId) {
+				this.taskAssignees.set(input.taskId, agentId);
+			}
+			await this.publish("fork_created", {
+				forkId,
+				parentForkId: this.sessionId,
+				agentId,
+				role: input.role,
+			});
+			return { forkId, agentId };
 		});
-		this.workerForkIds.set(agentId, forkId);
-		if (input.taskId) {
-			this.taskAssignees.set(input.taskId, agentId);
-		}
-		await this.publish("fork_created", {
-			forkId,
-			parentForkId: this.sessionId,
-			agentId,
-			role: input.role,
-		});
-		return { forkId, agentId };
 	}
 
 	/**
@@ -151,19 +161,21 @@ export class ForkRuntime {
 	 * Kill a worker. Publishes an `agent_finished` event with killed status.
 	 */
 	async killWorker(input: KillWorkerInput): Promise<void> {
-		const forkId = this.workerForkIds.get(input.workerId) ?? input.workerId;
-		await this.publish("agent_finished", {
-			agentId: input.workerId,
-			forkId,
-			willRetry: false,
-			killed: true,
-			stopReason: "killed",
-			reason: input.reason ?? "killed by leader",
-		});
-		await this.publish("worker_killed", {
-			agentId: input.workerId,
-			forkId,
-			reason: input.reason ?? "killed by leader",
+		await this.withMutation(async () => {
+			const forkId = this.workerForkIds.get(input.workerId) ?? input.workerId;
+			await this.publish("agent_finished", {
+				agentId: input.workerId,
+				forkId,
+				willRetry: false,
+				killed: true,
+				stopReason: "killed",
+				reason: input.reason ?? "killed by leader",
+			});
+			await this.publish("worker_killed", {
+				agentId: input.workerId,
+				forkId,
+				reason: input.reason ?? "killed by leader",
+			});
 		});
 	}
 
@@ -171,18 +183,20 @@ export class ForkRuntime {
 	 * Create a task in the task graph. Publishes a `task.created` event.
 	 */
 	async createTask(input: CreateTaskInput): Promise<{ taskId: string }> {
-		const taskId = randomUUID();
-		await this.publish("task.created", {
-			taskId,
-			title: input.title,
-			description: input.description ?? "",
-			parentId: input.parentId ?? null,
-			assignee: input.assignee ?? null,
+		return this.withMutation(async () => {
+			const taskId = randomUUID();
+			await this.publish("task.created", {
+				taskId,
+				title: input.title,
+				description: input.description ?? "",
+				parentId: input.parentId ?? null,
+				assignee: input.assignee ?? null,
+			});
+			if (input.assignee) {
+				this.taskAssignees.set(taskId, input.assignee);
+			}
+			return { taskId };
 		});
-		if (input.assignee) {
-			this.taskAssignees.set(taskId, input.assignee);
-		}
-		return { taskId };
 	}
 
 	/**
@@ -231,29 +245,29 @@ export class ForkRuntime {
 	 * Reassign a task to a different worker. Publishes a `task.assigned` event.
 	 */
 	async reassignWorker(input: ReassignWorkerInput): Promise<void> {
-		// Kill the previously assigned worker (if any) so reassigning doesn't leave
-		// two workers running the same task.
-		const oldWorkerId = this.taskAssignees.get(input.taskId);
-		if (oldWorkerId && oldWorkerId !== input.workerId) {
-			const oldForkId = this.workerForkIds.get(oldWorkerId) ?? oldWorkerId;
-			await this.publish("agent_finished", {
-				agentId: oldWorkerId,
-				forkId: oldForkId,
-				willRetry: false,
-				killed: true,
-				stopReason: "killed",
-				reason: "reassigned to new worker",
+		await this.withMutation(async () => {
+			const oldWorkerId = this.taskAssignees.get(input.taskId);
+			if (oldWorkerId && oldWorkerId !== input.workerId) {
+				const oldForkId = this.workerForkIds.get(oldWorkerId) ?? oldWorkerId;
+				await this.publish("agent_finished", {
+					agentId: oldWorkerId,
+					forkId: oldForkId,
+					willRetry: false,
+					killed: true,
+					stopReason: "killed",
+					reason: "reassigned to new worker",
+				});
+				await this.publish("worker_killed", {
+					agentId: oldWorkerId,
+					forkId: oldForkId,
+					reason: "reassigned to new worker",
+				});
+			}
+			this.taskAssignees.set(input.taskId, input.workerId);
+			await this.publish("task.assigned", {
+				taskId: input.taskId,
+				assignee: input.workerId,
 			});
-			await this.publish("worker_killed", {
-				agentId: oldWorkerId,
-				forkId: oldForkId,
-				reason: "reassigned to new worker",
-			});
-		}
-		this.taskAssignees.set(input.taskId, input.workerId);
-		await this.publish("task.assigned", {
-			taskId: input.taskId,
-			assignee: input.workerId,
 		});
 	}
 
