@@ -8,10 +8,11 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@piki/ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+import { type AtifTrajectory, exportAtifLegacy, exportAtifV17, exportAtifV17Magnitude } from "../core/atif.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
-import type { ReadonlySessionManager, SessionEntry, SessionHeader } from "../core/session-manager.ts";
+import type { ReadonlySessionManager } from "../core/session-manager.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -28,24 +29,30 @@ export interface PrintModeOptions {
 	initialImages?: ImageContent[];
 	/** Optional ATIF trajectory export path for the completed run */
 	atifPath?: string;
+	/** ATIF version to export: 1 (legacy) or 1.7 (Harbor format). Default: 1.7 */
+	atifVersion?: 1 | 1.7;
+	/** ATIF schema shape: "pi" (default, Pi envelope) or "magnitude" (Magnitude-compatible flat schema) */
+	atifSchema?: "pi" | "magnitude";
 }
 
-interface AtifTrajectory {
-	format: "atif";
-	version: 1;
-	session: SessionHeader | null;
-	entries: SessionEntry[];
-}
-
-export function exportAtif(sessionManager: ReadonlySessionManager, outputPath: string): string {
+export function exportAtif(
+	sessionManager: ReadonlySessionManager,
+	outputPath: string,
+	version: 1 | 1.7 = 1.7,
+	schema: "pi" | "magnitude" = "pi",
+): string {
 	const resolvedPath = resolve(outputPath);
 	mkdirSync(dirname(resolvedPath), { recursive: true });
-	const trajectory: AtifTrajectory = {
-		format: "atif",
-		version: 1,
-		session: sessionManager.getHeader(),
-		entries: sessionManager.getEntries(),
-	};
+	const header = sessionManager.getHeader();
+	const entries = sessionManager.getEntries();
+	let trajectory: AtifTrajectory;
+	if (schema === "magnitude" && version === 1.7) {
+		trajectory = exportAtifV17Magnitude(header, entries);
+	} else if (version === 1.7) {
+		trajectory = exportAtifV17(header, entries);
+	} else {
+		trajectory = exportAtifLegacy(header, entries);
+	}
 	writeFileSync(resolvedPath, `${JSON.stringify(trajectory, null, 2)}\n`, "utf-8");
 	return resolvedPath;
 }
@@ -171,7 +178,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		}
 
 		if (atifPath) {
-			exportAtif(session.sessionManager, atifPath);
+			exportAtif(session.sessionManager, atifPath, options.atifVersion, options.atifSchema);
 		}
 
 		return exitCode;

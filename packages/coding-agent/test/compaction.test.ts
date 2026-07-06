@@ -1,6 +1,6 @@
-import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai/compat";
-import { getModel } from "@earendil-works/pi-ai/compat";
+import type { AgentMessage, StreamFn } from "@piki/agent-core";
+import type { AssistantMessage, Usage } from "@piki/ai/compat";
+import { getModel } from "@piki/ai/compat";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { beforeEach, describe, expect, it } from "vitest";

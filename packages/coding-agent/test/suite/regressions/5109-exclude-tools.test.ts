@@ -9,9 +9,9 @@ function toolNames(tools: Array<{ name: string }>): string[] {
 
 describe("regression #5109: exclude tools", () => {
 	const extensionFactories: ExtensionFactory[] = [
-		(pi) => {
-			pi.on("session_start", () => {
-				pi.registerTool({
+		(piki) => {
+			piki.on("session_start", () => {
+				piki.registerTool({
 					name: "ask_question",
 					label: "Ask Question",
 					description: "Ask a question",
@@ -22,7 +22,7 @@ describe("regression #5109: exclude tools", () => {
 						details: {},
 					}),
 				});
-				pi.registerTool({
+				piki.registerTool({
 					name: "dynamic_tool",
 					label: "Dynamic Tool",
 					description: "Dynamic test tool",
@@ -50,7 +50,20 @@ describe("regression #5109: exclude tools", () => {
 			expect(allToolNames).not.toContain("ask_question");
 			expect(allToolNames).toContain("bash");
 			expect(allToolNames).toContain("dynamic_tool");
-			expect(harness.session.getActiveToolNames().sort()).toEqual(["bash", "dynamic_tool", "edit", "write"]);
+			// Core tools now include role-control, scratchpad, and web tools
+			const activeTools = harness.session.getActiveToolNames().sort();
+			expect(activeTools).toContain("bash");
+			expect(activeTools).toContain("dynamic_tool");
+			expect(activeTools).toContain("edit");
+			expect(activeTools).toContain("write");
+			expect(activeTools).toContain("scratchpad_save");
+			expect(activeTools).toContain("scratchpad_load");
+			expect(activeTools).toContain("web_search");
+			expect(activeTools).toContain("web_fetch");
+			expect(activeTools).toContain("createTask");
+			expect(activeTools).toContain("finishGoal");
+			expect(activeTools).not.toContain("read");
+			expect(activeTools).not.toContain("ask_question");
 			expect(harness.session.systemPrompt).not.toContain("- read:");
 			expect(harness.session.systemPrompt).not.toContain("ask_question");
 			expect(harness.session.systemPrompt).toContain("- dynamic_tool: Run dynamic test behavior");

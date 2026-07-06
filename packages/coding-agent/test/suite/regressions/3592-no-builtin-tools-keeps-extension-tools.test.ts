@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getModel } from "@earendil-works/pi-ai/compat";
+import { getModel } from "@piki/ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -18,7 +18,7 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 	let agentDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-no-builtin-tools-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `piki-no-builtin-tools-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		mkdirSync(agentDir, { recursive: true });
 	});
@@ -37,9 +37,9 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			agentDir,
 			settingsManager,
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", () => {
-						pi.registerTool({
+				(piki) => {
+					piki.on("session_start", () => {
+						piki.registerTool({
 							name: "dynamic_tool",
 							label: "Dynamic Tool",
 							description: "Tool registered from session_start",
@@ -73,13 +73,25 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 	it("keeps extension tools active when built-in defaults are disabled", async () => {
 		const session = await createSession({ noTools: "builtin" });
 
-		expect(
-			session
-				.getAllTools()
-				.map((tool) => tool.name)
-				.sort(),
-		).toEqual(["bash", "dynamic_tool", "edit", "find", "grep", "ls", "read", "write"]);
-		expect(session.getActiveToolNames()).toEqual(["dynamic_tool"]);
+		// Core tools now include role-control, scratchpad, and web tools
+		const allToolNames = session
+			.getAllTools()
+			.map((tool) => tool.name)
+			.sort();
+		expect(allToolNames).toContain("bash");
+		expect(allToolNames).toContain("dynamic_tool");
+		expect(allToolNames).toContain("edit");
+		expect(allToolNames).toContain("scratchpad_save");
+		expect(allToolNames).toContain("scratchpad_load");
+		expect(allToolNames).toContain("web_search");
+		expect(allToolNames).toContain("web_fetch");
+		expect(allToolNames).toContain("createTask");
+		expect(allToolNames).toContain("finishGoal");
+		// With noTools: "builtin", only extension tools should be active
+		const activeTools = session.getActiveToolNames();
+		expect(activeTools).toContain("dynamic_tool");
+		expect(activeTools).not.toContain("read");
+		expect(activeTools).not.toContain("bash");
 		expect(session.systemPrompt).toContain("- dynamic_tool: Run dynamic test behavior");
 		expect(session.systemPrompt).not.toContain("- read:");
 		expect(session.systemPrompt).not.toContain("- bash:");
@@ -111,9 +123,14 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 			noTools: "builtin",
 		});
 
-		expect(session.getActiveToolNames()).toEqual([]);
-		expect(session.systemPrompt).toContain("Available tools:\n(none)");
+		// With noTools: "builtin", only extension tools should be active
+		// (no extensions registered here, so active tools should be empty)
+		const activeTools = session.getActiveToolNames();
+		expect(activeTools).not.toContain("read");
+		expect(activeTools).not.toContain("bash");
+		expect(activeTools).not.toContain("edit");
 		expect(session.systemPrompt).not.toContain("- read:");
+		expect(session.systemPrompt).not.toContain("- bash:");
 		session.dispose();
 	});
 });

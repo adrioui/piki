@@ -18,7 +18,7 @@ export const DEFAULT_TASTE_ONBOARDING_STATE: TasteOnboardingState = {
 };
 
 export function getTasteOnboardingPath(cwd: string): string {
-	return join(cwd, ".pi", "settings.local.json");
+	return join(cwd, ".piki", "settings.local.json");
 }
 
 export function loadTasteOnboardingState(cwd: string): TasteOnboardingState {

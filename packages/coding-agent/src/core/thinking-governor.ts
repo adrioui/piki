@@ -10,7 +10,7 @@
  * and signals the agent to stop overthinking and act.
  */
 
-import { ROLE_DEFINITIONS, type RoleDef } from "@earendil-works/pi-event-core";
+import { ROLE_DEFINITIONS, type RoleDef } from "@piki/event-core";
 
 export interface ThinkingGovernorOptions {
 	/** Callback when overthinking is detected. */

@@ -6,7 +6,7 @@
  * snapshot system, not the user's git repository.
  */
 
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@piki/agent-core";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { diffSnapshotAgainstWorktree, resolveSnapshotSelector } from "../snapshot.ts";

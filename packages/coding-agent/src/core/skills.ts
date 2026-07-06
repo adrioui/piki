@@ -6,6 +6,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
+import { filterSkillsForRole, type SkillFilterRole } from "./role-context.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 
 /** Max name length per spec */
@@ -69,6 +70,10 @@ export interface SkillFrontmatter {
 	name?: string;
 	description?: string;
 	"disable-model-invocation"?: boolean;
+	/** Roles that can see this skill. Empty = visible to all. */
+	roles?: string[];
+	/** Roles excluded from seeing this skill. */
+	"exclude-roles"?: string[];
 	[key: string]: unknown;
 }
 
@@ -79,6 +84,10 @@ export interface Skill {
 	baseDir: string;
 	sourceInfo: SourceInfo;
 	disableModelInvocation: boolean;
+	/** Roles that can see this skill. Empty = visible to all. */
+	roles: string[];
+	/** Roles excluded from seeing this skill. */
+	excludeRoles: string[];
 }
 
 export interface LoadSkillsResult {
@@ -315,6 +324,8 @@ function loadSkillFromFile(
 				baseDir: skillDir,
 				sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
+				roles: Array.isArray(frontmatter.roles) ? frontmatter.roles : [],
+				excludeRoles: Array.isArray(frontmatter["exclude-roles"]) ? frontmatter["exclude-roles"] : [],
 			},
 			diagnostics,
 		};
@@ -333,8 +344,28 @@ function loadSkillFromFile(
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  */
-export function formatSkillsForPrompt(skills: Skill[]): string {
-	const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
+export interface FormatSkillsForPromptOptions {
+	/** Role to filter skills for. If provided, applies role-specific visibility rules. */
+	role?: SkillFilterRole;
+}
+
+/**
+ * Format skills for inclusion in a system prompt.
+ * Uses XML format per Agent Skills standard.
+ * See: https://agentskills.io/integrate-skills
+ *
+ * Skills with disableModelInvocation=true are excluded from the prompt
+ * (they can only be invoked explicitly via /skill:name commands).
+ *
+ * If a role is provided, skills are filtered based on the role's context lens.
+ */
+export function formatSkillsForPrompt(skills: Skill[], options: FormatSkillsForPromptOptions = {}): string {
+	let visibleSkills = skills.filter((s) => !s.disableModelInvocation);
+
+	// Apply role-based filtering if a role is specified
+	if (options.role) {
+		visibleSkills = filterSkillsForRole(visibleSkills, options.role);
+	}
 
 	if (visibleSkills.length === 0) {
 		return "";

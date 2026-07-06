@@ -1,4 +1,4 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage } from "@piki/ai";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { ExtensionUIContext } from "../../../src/core/extensions/index.ts";
@@ -188,8 +188,8 @@ describe("regression #5943: session_start transient UI", () => {
 		const events: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", (_event, ctx) => {
+				(piki) => {
+					piki.on("session_start", (_event, ctx) => {
 						ctx.ui.notify("Hello Error", "error");
 					});
 				},
@@ -225,9 +225,9 @@ describe("regression #5943: session_start transient UI", () => {
 		const events: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", () => {
-						pi.sendMessage({
+				(piki) => {
+					piki.on("session_start", () => {
+						piki.sendMessage({
 							customType: "session-start",
 							content: "custom from start",
 							display: true,
@@ -280,9 +280,9 @@ describe("regression #5943: session_start transient UI", () => {
 		const events: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", () => {
-						pi.sendUserMessage("user from start");
+				(piki) => {
+					piki.on("session_start", () => {
+						piki.sendUserMessage("user from start");
 					});
 				},
 			],
@@ -333,8 +333,8 @@ describe("regression #5943: session_start transient UI", () => {
 		});
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_start", (event, ctx) => {
+				(piki) => {
+					piki.on("session_start", (event, ctx) => {
 						events.push(`start:${event.reason}`);
 						ctx.ui.notify(`notify:${event.reason}`, "error");
 					});

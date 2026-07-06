@@ -2,8 +2,8 @@
  * Model resolution, scoping, and initial selection
  */
 
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
+import type { ThinkingLevel } from "@piki/agent-core";
+import { type Api, type KnownProvider, type Model, modelsAreEqual } from "@piki/ai";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
 import { isValidThinkingLevel } from "../cli/args.ts";
@@ -43,6 +43,8 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"kimi-coding": "kimi-for-coding",
 	"cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
 	"cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
+	clinepass: "cline-pass/glm-5.2",
+	commandcode: "claude-sonnet-5",
 	xiaomi: "mimo-v2.5-pro",
 	"xiaomi-token-plan-cn": "mimo-v2.5-pro",
 	"xiaomi-token-plan-ams": "mimo-v2.5-pro",
@@ -624,7 +626,7 @@ export async function restoreModelFromSession(
 	const hasConfiguredAuth = restoredModel ? modelRegistry.hasConfiguredAuth(restoredModel) : false;
 
 	if (restoredModel && hasConfiguredAuth) {
-		if (shouldPrintMessages && process.env.PI_DEBUG === "1") {
+		if (shouldPrintMessages && process.env.PIKI_DEBUG === "1") {
 			console.log(chalk.dim(`Restored model: ${savedProvider}/${savedModelId}`));
 		}
 		return { model: restoredModel, fallbackMessage: undefined };
@@ -639,7 +641,7 @@ export async function restoreModelFromSession(
 
 	// If we already have a model, use it as fallback
 	if (currentModel) {
-		if (shouldPrintMessages && process.env.PI_DEBUG === "1") {
+		if (shouldPrintMessages && process.env.PIKI_DEBUG === "1") {
 			console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
 		}
 		return {
@@ -668,7 +670,7 @@ export async function restoreModelFromSession(
 			fallbackModel = availableModels[0];
 		}
 
-		if (shouldPrintMessages && process.env.PI_DEBUG === "1") {
+		if (shouldPrintMessages && process.env.PIKI_DEBUG === "1") {
 			console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
 		}
 

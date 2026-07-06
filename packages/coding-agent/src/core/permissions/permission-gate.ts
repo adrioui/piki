@@ -35,12 +35,17 @@ export interface PermissionDecision {
 	reason?: string;
 	matchedEntry?: PermissionRule;
 	matchIndex?: number;
-	source?: "user" | "built-in";
+	source?: "user" | "role" | "built-in";
 }
 
 export interface PermissionGateOptions {
 	/** User-defined rules (evaluated first). */
 	userRules?: PermissionRule[];
+	/** Role identifier. Signals that role policy rules should be applied. */
+	roleId?: string;
+	/** Pre-computed role policy rules (from getRolePolicyRules). Evaluated
+	 * after user rules and before built-in rules when roleId is set. */
+	rolePolicyRules?: PermissionRule[];
 	/** Whether the current context is interactive (has UI for ask). */
 	interactive?: boolean;
 	/** Context kind: "thread" or "subagent". */
@@ -268,6 +273,25 @@ export function evaluatePermission(
 				matchIndex: i,
 				source: "user",
 			};
+		}
+	}
+
+	// Role policy rules (evaluated after user rules, before built-in rules).
+	// Only applied when a roleId is provided.
+	if (options.roleId && options.rolePolicyRules) {
+		const rolePolicy = options.rolePolicyRules;
+		for (let i = 0; i < rolePolicy.length; i++) {
+			const rule = rolePolicy[i]!;
+			if (ruleMatches(rule, toolName, input, contextKind)) {
+				return {
+					permitted: rule.action === "allow",
+					action: rule.action,
+					reason: reasonForAction(rule.action, rule.message),
+					matchedEntry: rule,
+					matchIndex: userRules.length + i,
+					source: "role",
+				};
+			}
 		}
 	}
 

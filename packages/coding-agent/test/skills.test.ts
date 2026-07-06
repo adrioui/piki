@@ -15,6 +15,8 @@ function createTestSkill(options: {
 	baseDir: string;
 	disableModelInvocation?: boolean;
 	source?: string;
+	roles?: string[];
+	excludeRoles?: string[];
 }): Skill {
 	return {
 		name: options.name,
@@ -23,6 +25,8 @@ function createTestSkill(options: {
 		baseDir: options.baseDir,
 		sourceInfo: createSyntheticSourceInfo(options.filePath, { source: options.source ?? "test" }),
 		disableModelInvocation: options.disableModelInvocation ?? false,
+		roles: options.roles ?? [],
+		excludeRoles: options.excludeRoles ?? [],
 	};
 }
 
@@ -170,6 +174,19 @@ describe("skills", () => {
 			// valid-skill, name-mismatch, invalid-name-chars, long-name, unknown-field, nested/child-skill, consecutive-hyphens
 			// NOT: missing-description, no-frontmatter (both missing descriptions)
 			expect(skills.length).toBeGreaterThanOrEqual(6);
+		});
+
+		it("should parse roles and exclude-roles from frontmatter", () => {
+			const { skills, diagnostics } = loadSkillsFromDir({
+				dir: join(fixturesDir, "role-filtered"),
+				source: "test",
+			});
+
+			expect(skills).toHaveLength(1);
+			expect(skills[0].name).toBe("role-filtered");
+			expect(skills[0].roles).toEqual(["engineer", "scout"]);
+			expect(skills[0].excludeRoles).toEqual(["critic"]);
+			expect(diagnostics).toHaveLength(0);
 		});
 
 		it("should return empty for non-existent directory", () => {
@@ -343,6 +360,49 @@ describe("skills", () => {
 			const result = formatSkillsForPrompt(skills);
 			expect(result).toBe("");
 		});
+
+		it("should filter skills by role when role option is provided", () => {
+			const skills: Skill[] = [
+				createTestSkill({
+					name: "clean-coder",
+					description: "Coding standards skill.",
+					filePath: "/path/clean-coder/SKILL.md",
+					baseDir: "/path/clean-coder",
+				}),
+				createTestSkill({
+					name: "librarian",
+					description: "Research skill.",
+					filePath: "/path/librarian/SKILL.md",
+					baseDir: "/path/librarian",
+				}),
+			];
+
+			// critic role excludes "clean-coder"
+			const result = formatSkillsForPrompt(skills, { role: "critic" });
+			expect(result).toContain("<name>librarian</name>");
+			expect(result).not.toContain("<name>clean-coder</name>");
+		});
+
+		it("should return all skills when role has no exclusions", () => {
+			const skills: Skill[] = [
+				createTestSkill({
+					name: "skill-a",
+					description: "Skill A.",
+					filePath: "/path/a/SKILL.md",
+					baseDir: "/path/a",
+				}),
+				createTestSkill({
+					name: "skill-b",
+					description: "Skill B.",
+					filePath: "/path/b/SKILL.md",
+					baseDir: "/path/b",
+				}),
+			];
+
+			const result = formatSkillsForPrompt(skills, { role: "engineer" });
+			expect(result).toContain("<name>skill-a</name>");
+			expect(result).toContain("<name>skill-b</name>");
+		});
 	});
 
 	describe("loadSkills with options", () => {
@@ -373,11 +433,11 @@ describe("skills", () => {
 		});
 
 		it("should expand ~ in skillPaths", () => {
-			const homeSkillsDir = join(homedir(), ".pi/agent/skills");
+			const homeSkillsDir = join(homedir(), ".piki/agent/skills");
 			const { skills: withTilde } = loadSkills({
 				agentDir: emptyAgentDir,
 				cwd: emptyCwd,
-				skillPaths: ["~/.pi/agent/skills"],
+				skillPaths: ["~/.piki/agent/skills"],
 				includeDefaults: true,
 			});
 			const { skills: withoutTilde } = loadSkills({

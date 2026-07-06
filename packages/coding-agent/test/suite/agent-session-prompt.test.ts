@@ -1,8 +1,8 @@
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall, type Model } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@piki/agent-core";
+import { fauxAssistantMessage, fauxToolCall, type Model } from "@piki/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { InputEvent } from "../../src/core/extensions/index.ts";
@@ -38,6 +38,36 @@ describe("AgentSession prompt characterization", () => {
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
 		expect(getMessageText(harness.session.messages[0]!)).toBe("hi");
 		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("expands @file mentions in user prompts relative to the session cwd", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		writeFileSync(join(harness.tempDir, "notes.txt"), "important context");
+		harness.setResponses([fauxAssistantMessage("ok")]);
+
+		await harness.session.prompt("read @notes.txt");
+
+		const text = getMessageText(harness.session.messages[0]!);
+		expect(text).toContain("<!-- included from notes.txt -->");
+		expect(text).toContain("important context");
+	});
+
+	it("emits runtime warnings for missing @file mentions", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("ok")]);
+
+		await harness.session.prompt("read @missing.txt");
+
+		const warning = harness.events.find(
+			(event) =>
+				event.type === "runtime_event" &&
+				event.runtimeEventType === "prompt.file_include_warning" &&
+				typeof event.payload.warning === "string",
+		);
+		expect(warning).toBeDefined();
+		expect(getMessageText(harness.session.messages[0]!)).toContain("@missing.txt");
 	});
 
 	it("handles a tool call turn and waits for the follow-up LLM response", async () => {
@@ -145,7 +175,7 @@ describe("AgentSession prompt characterization", () => {
 	});
 
 	it("expands skill commands before sending the prompt", async () => {
-		const tempDir = join(tmpdir(), `pi-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		const tempDir = join(tmpdir(), `piki-skill-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(tempDir, { recursive: true });
 		tempDirs.push(tempDir);
 		const skillPath = join(tempDir, "test-skill.md");
@@ -167,6 +197,8 @@ describe("AgentSession prompt characterization", () => {
 							origin: "top-level",
 							baseDir: tempDir,
 						}),
+						roles: [],
+						excludeRoles: [],
 					},
 				],
 				diagnostics: [],
@@ -228,8 +260,8 @@ describe("AgentSession prompt characterization", () => {
 		const commandRuns: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.registerCommand("testcmd", {
+				(piki) => {
+					piki.registerCommand("testcmd", {
 						description: "Test command",
 						handler: async (args) => {
 							commandRuns.push(args);
@@ -264,8 +296,8 @@ describe("AgentSession prompt characterization", () => {
 		const inputEvents: InputEvent[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("input", (event) => {
+				(piki) => {
+					piki.on("input", (event) => {
 						inputEvents.push(event);
 					});
 				},
@@ -302,8 +334,8 @@ describe("AgentSession prompt characterization", () => {
 		const harness = await createHarness({
 			tools: [waitTool],
 			extensionFactories: [
-				(pi) => {
-					pi.on("input", (event) => {
+				(piki) => {
+					piki.on("input", (event) => {
 						inputEvents.push(event);
 					});
 				},

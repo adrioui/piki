@@ -198,7 +198,7 @@ export class TasteProfileStore {
 	}
 
 	getProjectDir(cwd: string): string {
-		return join(cwd, ".pi", "taste");
+		return join(cwd, ".piki", "taste");
 	}
 
 	getWorkspaceDir(cwd: string): string {

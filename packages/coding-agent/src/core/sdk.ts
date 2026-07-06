@@ -1,14 +1,8 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, type ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type {
-	Api,
-	AssistantMessage,
-	AssistantMessageEvent,
-	AssistantMessageEventStream,
-	Context,
-} from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import { Agent, type AgentMessage, type ThinkingLevel } from "@piki/agent-core";
+import type { Api, AssistantMessage, AssistantMessageEvent, AssistantMessageEventStream, Context } from "@piki/ai";
+import { createAssistantMessageEventStream } from "@piki/ai";
+import { clampThinkingLevel, type Message, type Model, streamSimple } from "@piki/ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -46,7 +40,7 @@ const AUTH_RETRY_STEPS = [false, true] as const;
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
 	cwd?: string;
-	/** Global config directory. Default: ~/.pi/agent */
+	/** Global config directory. Default: ~/.piki/agent */
 	agentDir?: string;
 
 	/** Auth storage for credentials. Default: AuthStorage.create(agentDir/auth.json) */
@@ -300,7 +294,7 @@ export function streamSimpleWithApiKeyResolver(
  * const { session } = await createAgentSession();
  *
  * // With explicit model
- * import { getModel } from '@earendil-works/pi-ai';
+ * import { getModel } from '@piki/ai';
  * const { session } = await createAgentSession({
  *   model: getModel('anthropic', 'claude-opus-4-5'),
  *   thinkingLevel: 'high',

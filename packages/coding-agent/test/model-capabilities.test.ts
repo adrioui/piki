@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@piki/ai";
 import { describe, expect, test } from "vitest";
 import { deriveModelCapabilities } from "../src/core/model-capabilities.ts";
 

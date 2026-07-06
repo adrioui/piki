@@ -5,9 +5,9 @@
  * a summary of the branch being left so context isn't lost.
  */
 
-import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { Model, SimpleStreamOptions } from "@earendil-works/pi-ai/compat";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import type { AgentMessage, StreamFn } from "@piki/agent-core";
+import type { Model, SimpleStreamOptions } from "@piki/ai/compat";
+import { completeSimple } from "@piki/ai/compat";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

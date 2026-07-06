@@ -132,7 +132,7 @@ export function getShellEnv(cwd?: string): NodeJS.ProcessEnv {
 		[pathKey]: updatedPath,
 		NO_COLOR: "1",
 		PROJECT_ROOT: cwd ?? process.cwd(),
-		M: process.env.PI_SCRATCHPAD_DIR ?? "",
+		M: process.env.PIKI_SCRATCHPAD_DIR ?? "",
 	};
 }
 

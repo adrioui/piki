@@ -13,11 +13,11 @@ describe("createAgentSession skills option", () => {
 	let skillsDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-sdk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `piki-sdk-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		skillsDir = join(tempDir, "skills", "test-skill");
 		mkdirSync(skillsDir, { recursive: true });
 
-		// Create a test skill in the pi skills directory
+		// Create a test skill in the piki skills directory
 		writeFileSync(
 			join(skillsDir, "SKILL.md"),
 			`---
@@ -84,6 +84,8 @@ This is a test skill.
 			baseDir: "/fake/path",
 			sourceInfo: createSyntheticSourceInfo("/fake/path/SKILL.md", { source: "sdk" }),
 			disableModelInvocation: false,
+			roles: [],
+			excludeRoles: [],
 		};
 
 		const resourceLoader: ResourceLoader = {

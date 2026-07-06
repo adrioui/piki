@@ -9,6 +9,7 @@ import {
 	formatEnvironmentSnapshot,
 } from "./environment-snapshot.ts";
 import { classifyPromptVariant, isOpenSourceExplicitVariant, type PromptVariant } from "./prompt-family.ts";
+import type { SkillFilterRole } from "./role-context.ts";
 import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 
 export interface BuildSystemPromptOptions {
@@ -45,6 +46,11 @@ export interface BuildSystemPromptOptions {
 	 * `false` to disable, or supply a provider to control the values directly.
 	 */
 	environmentSnapshot?: boolean | EnvironmentSnapshotProvider;
+	/**
+	 * Role for filtering skills in the system prompt. When provided, only
+	 * skills visible to this role are included.
+	 */
+	role?: SkillFilterRole;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -63,6 +69,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		modelId,
 		modelName,
 		environmentSnapshot,
+		role,
 	} = options;
 	const resolvedCwd = cwd;
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
@@ -114,7 +121,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 		// Append skills section (only when requested and available)
 		if (includeSkills && skills.length > 0) {
-			prompt += formatSkillsForPrompt(skills);
+			prompt += formatSkillsForPrompt(skills, { role });
 		}
 
 		// Add date and working directory last
@@ -229,7 +236,7 @@ export function buildOpenSourceExplicitPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are pi, an interactive coding agent. You operate inside the pi coding harness. You can read files, search code, run commands, edit files, and write files.
+	return `You are piki, an interactive coding agent. You operate inside the piki coding harness. You can read files, search code, run commands, edit files, and write files.
 
 Available tools:
 ${toolsList}
@@ -326,7 +333,7 @@ Verification loops:
 - Don't assume one-shot completion. Iterate: implement → validate → fix → re-validate until it passes.
 - When stuck after multiple failed attempts, step back, re-examine assumptions, and consider a different approach.
 
-Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
+Piki documentation (read only when the user asks about piki itself, its SDK, extensions, themes, skills, or TUI):
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 - When asked about extensions, themes, skills, prompt templates, TUI, keybindings, SDK, custom providers, or models, read the relevant docs and follow .md cross-references before implementing
 
@@ -352,7 +359,7 @@ export function buildDefaultPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
+	return `You are an expert coding assistant operating inside piki, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
 
 Available tools:
 ${toolsList}
@@ -377,7 +384,7 @@ Token economics:
 - Each turn costs the full context window in input tokens. Batch independent tool calls into a single turn.
 - Prefer surgical edits over broad rewrites to save output tokens.
 
-Pi documentation (read only when the user asks about pi itself):
+Piki documentation (read only when the user asks about piki itself):
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 
 Communication:
@@ -397,7 +404,7 @@ export function buildKimiExplicitPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are pi, an interactive coding agent optimized for speed and efficiency. You operate inside the pi coding harness.
+	return `You are piki, an interactive coding agent optimized for speed and efficiency. You operate inside the piki coding harness.
 
 SPEED FIRST:
 - Minimize thinking time, minimize tokens, maximize action.
@@ -441,7 +448,7 @@ Validation:
 Project instructions:
 - Project context files such as AGENTS.md are authoritative. Obey the nearest relevant project instructions.
 
-Pi documentation (read only when the user asks about pi itself):
+Piki documentation (read only when the user asks about piki itself):
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 
 Communication:
@@ -460,7 +467,7 @@ export function buildOpenAIExplicitPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are pi, an interactive coding agent operating inside the pi coding harness. You can read files, search code, run commands, edit files, and write files.
+	return `You are piki, an interactive coding agent operating inside the piki coding harness. You can read files, search code, run commands, edit files, and write files.
 
 Available tools:
 ${toolsList}
@@ -502,7 +509,7 @@ Observation-first reasoning:
 Project instructions:
 - Project context files such as AGENTS.md are authoritative. Obey the nearest relevant project instructions.
 
-Pi documentation (read only when the user asks about pi itself):
+Piki documentation (read only when the user asks about piki itself):
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 
 Guidelines:
@@ -525,7 +532,7 @@ export function buildGeminiExplicitPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are pi, an interactive coding agent operating inside the pi coding harness.
+	return `You are piki, an interactive coding agent operating inside the piki coding harness.
 
 ## ROLE
 You help users by reading files, executing commands, editing code, and writing new files.
@@ -564,8 +571,8 @@ Follow this workflow for every task:
 ## PROJECT INSTRUCTIONS
 Project context files such as AGENTS.md are authoritative. Obey the nearest relevant project instructions.
 
-## PI DOCUMENTATION
-Read only when the user asks about pi itself:
+## PIKI DOCUMENTATION
+Read only when the user asks about piki itself:
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 
 ## GUIDELINES
@@ -587,7 +594,7 @@ export function buildGrokExplicitPrompt(
 	docsPath: string,
 	examplesPath: string,
 ): string {
-	return `You are pi, an interactive coding agent operating inside the pi coding harness. You have full access to the user's development environment through the tools available to you.
+	return `You are piki, an interactive coding agent operating inside the piki coding harness. You have full access to the user's development environment through the tools available to you.
 
 Available tools:
 ${toolsList}
@@ -617,7 +624,7 @@ Observation-first reasoning:
 Project instructions:
 - Project context files such as AGENTS.md are authoritative. Obey the nearest relevant project instructions.
 
-Pi documentation (read only when the user asks about pi itself):
+Piki documentation (read only when the user asks about piki itself):
 - README: ${readmePath} | docs: ${docsPath} | examples: ${examplesPath}
 
 Guidelines:

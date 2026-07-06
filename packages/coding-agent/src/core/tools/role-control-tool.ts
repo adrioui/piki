@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@piki/agent-core";
 import { Type } from "typebox";
 import { defineTool, type ExtensionContext, type ToolDefinition } from "../extensions/types.ts";
 import type { ForkRuntime } from "../fork-runtime.ts";

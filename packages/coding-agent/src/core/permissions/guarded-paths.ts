@@ -38,8 +38,8 @@ export const GUARDED_PATH_PATTERNS: readonly string[] = [
 	"**/.amp/**",
 
 	// Taste profile files
-	"**/.pi/taste/taste.md",
-	"**/.pi/taste/**/taste.md",
+	"**/.piki/taste/taste.md",
+	"**/.piki/taste/**/taste.md",
 
 	// System directories
 	"/etc",

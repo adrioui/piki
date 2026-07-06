@@ -1,26 +1,16 @@
 /**
  * Model tier configuration — moved out of agent-model-resolver.ts for maintainability.
  * Model IDs break when versions change; config makes them maintainable.
- * Users can override via .pi/settings.local.json.
+ * Users can override via .piki/settings.local.json.
  */
 
-import type { ModelTier } from "@earendil-works/pi-event-core";
+import type { ModelTier } from "@piki/event-core";
 
 const DEFAULT_TIER_MODEL_IDS: Record<ModelTier, string[]> = {
-	fast: ["opencode-go/deepseek-v4-flash", "deepseek/deepseek-v4-flash", "deepseek-v4-flash"],
-	smart: ["opencode-go/glm-5.2", "zai/glm-5.2", "glm-5.2", "deepseek/deepseek-v4-pro"],
-	"smart+thinking": [
-		"opencode-go/kimi-k2.7-code",
-		"moonshotai/kimi-k2.7-code",
-		"kimi-k2.7-code",
-		"deepseek/deepseek-v4-pro",
-	],
-	"smart+high-temp+thinking": [
-		"opencode-go/kimi-k2.7-code",
-		"moonshotai/kimi-k2.7-code",
-		"kimi-k2.7-code",
-		"deepseek/deepseek-v4-pro",
-	],
+	fast: ["commandcode/xiaomi/mimo-v2.5-pro"],
+	smart: ["commandcode/deepseek/deepseek-v4-pro"],
+	"smart+thinking": ["commandcode/deepseek/deepseek-v4-pro"],
+	"smart+high-temp+thinking": ["commandcode/deepseek/deepseek-v4-pro"],
 };
 
 /**

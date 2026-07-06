@@ -1,5 +1,5 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@piki/agent-core";
+import { fauxAssistantMessage, fauxThinking, fauxToolCall } from "@piki/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, type Harness } from "./harness.ts";
@@ -100,8 +100,8 @@ describe("AgentSession retry and event characterization", () => {
 		const harness = await createHarness({
 			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("message_end", async (event) => {
+				(piki) => {
+					piki.on("message_end", async (event) => {
 						if (event.message.role === "assistant") {
 							await new Promise((resolve) => setTimeout(resolve, 40));
 						}
@@ -204,11 +204,11 @@ describe("AgentSession retry and event characterization", () => {
 		const order: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
-				(pi) => {
-					pi.on("message_start", async (event) => {
+				(piki) => {
+					piki.on("message_start", async (event) => {
 						order.push(`extension:${event.type}:${event.message.role}`);
 					});
-					pi.on("message_end", async (event) => {
+					piki.on("message_end", async (event) => {
 						order.push(`extension:${event.type}:${event.message.role}`);
 					});
 				},
@@ -243,7 +243,10 @@ describe("AgentSession retry and event characterization", () => {
 
 		await harness.session.prompt("hi");
 
-		expect(normalizeEventOrder(harness.events)).toEqual([
+		const eventOrder = normalizeEventOrder(harness.events);
+		// Title worker may emit runtime_event after agent_end, so check core events
+		const coreEvents = eventOrder.filter((e) => e !== "runtime_event");
+		expect(coreEvents).toEqual([
 			"agent_start",
 			"turn_start",
 			"message_start:user",
@@ -279,7 +282,8 @@ describe("AgentSession retry and event characterization", () => {
 		await harness.session.prompt("hi");
 
 		expect(toolRuns).toEqual(["hello"]);
-		expect(normalizeEventOrder(harness.events)).toEqual([
+		const coreEvents = normalizeEventOrder(harness.events).filter((e) => e !== "runtime_event");
+		expect(coreEvents).toEqual([
 			"agent_start",
 			"turn_start",
 			"message_start:user",
@@ -328,7 +332,9 @@ describe("AgentSession retry and event characterization", () => {
 
 		await harness.session.prompt("hi");
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		// Title worker may emit runtime_event after agent_end, so find agent_end event
+		const agentEndEvent = [...harness.events].reverse().find((e) => e.type === "agent_end");
+		expect(agentEndEvent).toBeDefined();
 	});
 
 	it("emits agent_end for aborted runs and persists the aborted assistant message", async () => {
@@ -350,7 +356,9 @@ describe("AgentSession retry and event characterization", () => {
 		await harness.session.abort();
 		await promptPromise;
 
-		expect(harness.events[harness.events.length - 1]?.type).toBe("agent_end");
+		// Title worker may emit runtime_event after agent_end, so find agent_end event
+		const agentEndEvent = [...harness.events].reverse().find((e) => e.type === "agent_end");
+		expect(agentEndEvent).toBeDefined();
 		const lastMessage = harness.session.messages[harness.session.messages.length - 1];
 		expect(lastMessage?.role).toBe("assistant");
 		if (lastMessage?.role === "assistant") {

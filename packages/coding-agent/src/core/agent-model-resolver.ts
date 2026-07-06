@@ -1,6 +1,6 @@
-import type { Api } from "@earendil-works/pi-ai";
-import type { Model } from "@earendil-works/pi-ai/compat";
-import { ROLE_DEFINITIONS } from "@earendil-works/pi-event-core";
+import type { Api } from "@piki/ai";
+import type { Model } from "@piki/ai/compat";
+import { ROLE_DEFINITIONS } from "@piki/event-core";
 import type { AgentSessionServices } from "./agent-session-services.ts";
 import { resolvePreferredAuxModel } from "./aux-model.ts";
 import { getTierModelIds } from "./model-tier-config.ts";

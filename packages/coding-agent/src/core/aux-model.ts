@@ -1,5 +1,5 @@
-import type { Api, Message } from "@earendil-works/pi-ai";
-import { type Model, streamSimple } from "@earendil-works/pi-ai/compat";
+import type { Api, Message } from "@piki/ai";
+import { type Model, streamSimple } from "@piki/ai/compat";
 import type { AgentSessionServices } from "./agent-session-services.ts";
 import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
 import { streamSimpleWithApiKeyResolver } from "./sdk.ts";

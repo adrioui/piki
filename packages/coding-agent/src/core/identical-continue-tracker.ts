@@ -5,7 +5,7 @@
  */
 
 import { createHash } from "node:crypto";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@piki/agent-core";
 
 export class IdenticalContinueTracker {
 	private lastHash: string | undefined;

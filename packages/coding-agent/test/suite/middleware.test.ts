@@ -3,8 +3,8 @@
  * handling in ExtensionRunner.
  */
 
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@piki/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@piki/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolCallMiddlewareResult, ToolResultMiddlewareResult } from "../../src/core/extensions/index.ts";
@@ -36,8 +36,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const middlewareExtension: ExtensionFactory = (pi) => {
-			pi.on("tool_call", (_event) => {
+		const middlewareExtension: ExtensionFactory = (piki) => {
+			piki.on("tool_call", (_event) => {
 				// Return middleware-style modify result
 				return {
 					action: "modify",
@@ -76,8 +76,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const middlewareExtension: ExtensionFactory = (pi) => {
-			pi.on("tool_call", (_event) => {
+		const middlewareExtension: ExtensionFactory = (piki) => {
+			piki.on("tool_call", (_event) => {
 				return {
 					action: "reject",
 					reason: "This tool is not allowed",
@@ -122,8 +122,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const middlewareExtension: ExtensionFactory = (pi) => {
-			pi.on("tool_call", (_event) => {
+		const middlewareExtension: ExtensionFactory = (piki) => {
+			piki.on("tool_call", (_event) => {
 				return {
 					action: "synthesize",
 					result: {
@@ -169,8 +169,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const resultMiddleware: ExtensionFactory = (pi) => {
-			pi.on("tool_result", (_event) => {
+		const resultMiddleware: ExtensionFactory = (piki) => {
+			piki.on("tool_result", (_event) => {
 				return {
 					action: "modify",
 					content: [{ type: "text", text: "modified result" }],
@@ -211,8 +211,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const resultMiddleware: ExtensionFactory = (pi) => {
-			pi.on("tool_result", (_event) => {
+		const resultMiddleware: ExtensionFactory = (piki) => {
+			piki.on("tool_result", (_event) => {
 				return {
 					action: "reject",
 					reason: "Result was rejected by security policy",
@@ -257,8 +257,8 @@ describe("Tool call middleware", () => {
 			},
 		};
 
-		const middlewareExtension: ExtensionFactory = (pi) => {
-			pi.on("tool_call", (_event) => {
+		const middlewareExtension: ExtensionFactory = (piki) => {
+			piki.on("tool_call", (_event) => {
 				return {
 					action: "allow",
 				} satisfies ToolCallMiddlewareResult;

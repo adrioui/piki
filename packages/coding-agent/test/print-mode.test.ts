@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ImageContent } from "@piki/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionShutdownEvent } from "../src/index.ts";
 import { runPrintMode } from "../src/modes/print-mode.ts";
@@ -128,7 +128,7 @@ describe("runPrintMode", () => {
 
 	it("writes ATIF trajectory when requested", async () => {
 		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
-		const tempDir = mkdtempSync(join(tmpdir(), "pi-atif-test-"));
+		const tempDir = mkdtempSync(join(tmpdir(), "piki-atif-test-"));
 		const atifPath = join(tempDir, "trajectory.json");
 
 		try {
@@ -142,11 +142,13 @@ describe("runPrintMode", () => {
 			const exported = JSON.parse(readFileSync(atifPath, "utf-8")) as {
 				format?: string;
 				version?: number;
-				entries?: unknown[];
+				steps?: unknown[];
+				vendor?: { piki?: { entries?: unknown[] } };
 			};
 			expect(exported.format).toBe("atif");
-			expect(exported.version).toBe(1);
-			expect(exported.entries).toEqual([]);
+			expect(exported.version).toBe(1.7);
+			expect(exported.steps).toEqual([]);
+			expect(exported.vendor?.piki?.entries).toEqual([]);
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}

@@ -891,12 +891,12 @@ describe("edit tool fuzzy matching", () => {
 
 		const result = await editTool.execute("test-fuzzy-chinese", {
 			path: testFile,
-			edits: [{ old: "你好,世界\n你好(世界)\n", new: "你好，pi\n你好(pi)\n" }],
+			edits: [{ old: "你好,世界\n你好(世界)\n", new: "你好，piki\n你好(piki)\n" }],
 		});
 
 		expect(getTextOutput(result)).toContain("Successfully replaced");
 		const content = readFileSync(testFile, "utf-8");
-		expect(content).toBe("你好，pi\n你好(pi)\n");
+		expect(content).toBe("你好，piki\n你好(piki)\n");
 	});
 
 	it("should match compatibility-equivalent Unicode forms", async () => {

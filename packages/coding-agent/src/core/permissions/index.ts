@@ -26,6 +26,7 @@ export {
 	type PermissionGateOptions,
 	type PermissionRule,
 } from "./permission-gate.ts";
+export { getRolePolicyRules } from "./role-policy.ts";
 export {
 	classifyShellCommand,
 	parseShellCommand,

@@ -1,7 +1,7 @@
 /**
  * Tests for src/core/snapshot.ts — Git-based auto-snapshot.
  *
- * Uses temporary git repos in /tmp to avoid mutating the pi workspace.
+ * Uses temporary git repos in /tmp to avoid mutating the piki workspace.
  */
 
 import { execFileSync } from "node:child_process";
@@ -20,7 +20,7 @@ import {
 
 /** Create a minimal git repo at a temp location and return the path. */
 function createTempGitRepo(): string {
-	const dir = mkdtempSync(join(process.env.HOME ?? tmpdir(), "pi-snapshot-test-"));
+	const dir = mkdtempSync(join(process.env.HOME ?? tmpdir(), "piki-snapshot-test-"));
 	mkdirSync(join(dir, "subdir"), { recursive: true });
 
 	// Init git
@@ -37,8 +37,8 @@ function createTempGitRepo(): string {
 }
 
 describe("isGitRepo", () => {
-	it("returns true for the pi repo itself", () => {
-		// The pi monorepo root
+	it("returns true for the piki repo itself", () => {
+		// The piki monorepo root
 		const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
 			cwd: __dirname,
 			stdio: "pipe",
@@ -55,8 +55,8 @@ describe("isGitRepo", () => {
 describe("isSafeVcsWorkspace", () => {
 	it("requires the workspace to be below HOME", () => {
 		const originalHome = process.env.HOME;
-		const home = mkdtempSync(join(tmpdir(), "pi-home-"));
-		const outside = mkdtempSync(join(tmpdir(), "pi-outside-longer-than-home-"));
+		const home = mkdtempSync(join(tmpdir(), "piki-home-"));
+		const outside = mkdtempSync(join(tmpdir(), "piki-outside-longer-than-home-"));
 		try {
 			process.env.HOME = home;
 			expect(isSafeVcsWorkspace(home)).toBe(false);

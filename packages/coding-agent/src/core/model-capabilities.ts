@@ -1,4 +1,4 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@piki/ai";
 
 export interface ModelCapabilities {
 	vision: boolean;

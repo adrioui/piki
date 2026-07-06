@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { SPAWNABLE_ROLES } from "@earendil-works/pi-event-core";
+import { SPAWNABLE_ROLES } from "@piki/event-core";
 import { Effect, Semaphore } from "effect";
 
 export type PublishFn = (type: string, payload: Record<string, unknown>) => Promise<void>;

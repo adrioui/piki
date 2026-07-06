@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "@piki/ai";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRegistry } from "../src/core/model-registry.ts";
@@ -15,7 +15,7 @@ describe("AgentSession prompt profile on model switch", () => {
 	let agentDir: string;
 
 	beforeEach(() => {
-		tempDir = join(tmpdir(), `pi-prompt-profile-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tempDir = join(tmpdir(), `piki-prompt-profile-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		agentDir = join(tempDir, "agent");
 		mkdirSync(agentDir, { recursive: true });
 	});
@@ -61,22 +61,22 @@ describe("AgentSession prompt profile on model switch", () => {
 
 		try {
 			// Starts on Claude -> default profile (verbose identity present)
-			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside pi");
-			expect(session.systemPrompt).not.toContain("You are pi, an interactive coding agent.");
+			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside piki");
+			expect(session.systemPrompt).not.toContain("You are piki, an interactive coding agent.");
 
 			// Switch to GLM -> open-source-explicit profile rebuilds the prompt
 			await session.setModel(glmModel as Model<"openai-completions">);
-			expect(session.systemPrompt).toContain("You are pi, an interactive coding agent.");
+			expect(session.systemPrompt).toContain("You are piki, an interactive coding agent.");
 			expect(session.systemPrompt).toContain("Tool usage:");
-			expect(session.systemPrompt).not.toContain("You are an expert coding assistant operating inside pi");
+			expect(session.systemPrompt).not.toContain("You are an expert coding assistant operating inside piki");
 
 			// Switch back to Claude -> default profile restored. The prompt content
 			// is deterministic, so this reproduces the original default prompt; what
 			// matters is that the open-source-explicit sections are gone again.
 			await session.setModel(claudeModel as Model<"anthropic-messages">);
-			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside pi");
+			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside piki");
 			expect(session.systemPrompt).not.toContain("Tool usage:");
-			expect(session.systemPrompt).not.toContain("You are pi, an interactive coding agent.");
+			expect(session.systemPrompt).not.toContain("You are piki, an interactive coding agent.");
 		} finally {
 			session.dispose();
 		}

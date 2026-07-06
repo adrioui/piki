@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { ImageContent, TextContent } from "@piki/ai";
 
 export interface ToolResultForModel {
 	content: (TextContent | ImageContent)[];

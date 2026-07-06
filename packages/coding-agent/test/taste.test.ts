@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("TasteProfileStore", () => {
 	it("records observations and reports status", () => {
-		const baseDir = mkdtempSync(join(tmpdir(), "pi-taste-"));
+		const baseDir = mkdtempSync(join(tmpdir(), "piki-taste-"));
 		tempDirs.push(baseDir);
 		const store = new TasteProfileStore(baseDir);
 
@@ -37,7 +37,7 @@ describe("TasteProfileStore", () => {
 	});
 
 	it("renders only valid taste entries into the injected profile", () => {
-		const baseDir = mkdtempSync(join(tmpdir(), "pi-taste-"));
+		const baseDir = mkdtempSync(join(tmpdir(), "piki-taste-"));
 		tempDirs.push(baseDir);
 		const store = new TasteProfileStore(baseDir);
 		const profilePath = store.getProfilePath("/workspace/project");
@@ -58,7 +58,7 @@ describe("TasteProfileStore", () => {
 	});
 
 	it("flags invalid lines during lint", () => {
-		const baseDir = mkdtempSync(join(tmpdir(), "pi-taste-"));
+		const baseDir = mkdtempSync(join(tmpdir(), "piki-taste-"));
 		tempDirs.push(baseDir);
 		const store = new TasteProfileStore(baseDir);
 		const profilePath = store.getProfilePath("/workspace/project");

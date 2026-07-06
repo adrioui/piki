@@ -2,7 +2,7 @@
  * Auto-snapshot: Git-based undo using tree snapshots.
  *
  * Creates lightweight git tree snapshots of the working directory before
- * each agent turn. Snapshots are stored as git refs under refs/pi/snapshots/
+ * each agent turn. Snapshots are stored as git refs under refs/piki/snapshots/
  * and can be restored to undo file changes.
  */
 
@@ -126,7 +126,7 @@ function countTrackedFiles(workspaceRoot: string): number {
  * 1. Creates a temp index file.
  * 2. Loads HEAD into the temp index (or --empty if no HEAD).
  * 3. Runs `git add -A` against the temp index.
- * 4. Writes the tree and stores its OID under refs/pi/snapshots/<sessionId>/<messageId>.
+ * 4. Writes the tree and stores its OID under refs/piki/snapshots/<sessionId>/<messageId>.
  * 5. Cleans up the temp index.
  *
  * Returns the tree OID, or null if not a git repo or the git commands fail.
@@ -193,7 +193,7 @@ export function createSnapshot(workspaceRoot: string, sessionId: string, message
 		}
 
 		// Store the tree OID as a ref
-		const ref = `refs/pi/snapshots/${sessionId}/${messageId}`;
+		const ref = `refs/piki/snapshots/${sessionId}/${messageId}`;
 		execFileSync("git", ["update-ref", ref, treeOID], {
 			cwd: workspaceRoot,
 			stdio: "pipe",
@@ -231,7 +231,7 @@ export function restoreSnapshot(workspaceRoot: string, treeOID: string, path?: s
 		throw new Error("Invalid snapshot tree object");
 	}
 	const checkoutPath = normalizeRestorePath(path);
-	const cleanArgs = ["clean", "-fd", "-e", ".pi"];
+	const cleanArgs = ["clean", "-fd", "-e", ".piki"];
 	if (checkoutPath !== ".") {
 		cleanArgs.push("--", checkoutPath);
 	}
@@ -294,7 +294,7 @@ export function listSnapshots(
 			encoding: "utf-8",
 		}).trim();
 
-		const refsDir = resolve(workspaceRoot, gitDir, "refs", "pi", "snapshots", sessionId);
+		const refsDir = resolve(workspaceRoot, gitDir, "refs", "piki", "snapshots", sessionId);
 
 		if (!existsSync(refsDir)) {
 			return [];

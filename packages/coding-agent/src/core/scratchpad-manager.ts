@@ -30,7 +30,7 @@ export interface ScratchpadArtifact {
 }
 
 export interface ScratchpadConfig {
-	/** Root directory for the scratchpad (default: .pi/scratchpad) */
+	/** Root directory for the scratchpad (default: .piki/scratchpad) */
 	rootDir?: string;
 	/** Whether to auto-create scratchpad directories on first use */
 	autoCreate?: boolean;
@@ -64,6 +64,10 @@ function generateArtifactFilename(title: string, timestamp: Date = new Date()): 
 		.replace(/^-|-$/g, "")
 		.slice(0, 50);
 	return `${date}-${slug}.md`;
+}
+
+function generateJsonFilename(title: string, timestamp: Date = new Date()): string {
+	return generateArtifactFilename(title, timestamp).replace(/\.md$/, ".json");
 }
 
 /**
@@ -140,7 +144,7 @@ export class ScratchpadManager {
 	private sessionId?: string;
 
 	constructor(config: ScratchpadConfig = {}) {
-		this.rootDir = config.rootDir || join(process.cwd(), ".pi", "scratchpad");
+		this.rootDir = config.rootDir || join(process.cwd(), ".piki", "scratchpad");
 		this.autoCreate = config.autoCreate ?? true;
 	}
 
@@ -218,6 +222,45 @@ export class ScratchpadManager {
 		const content = `${frontmatter}\n\n${artifact.content}`;
 
 		writeFileSync(filePath, content, "utf-8");
+		return filePath;
+	}
+
+	saveJsonResult(title: string, data: unknown, metadata?: Record<string, unknown>): string {
+		this.initialize();
+		const categoryDir = join(this.rootDir, "results");
+		if (!existsSync(categoryDir)) {
+			mkdirSync(categoryDir, { recursive: true });
+		}
+
+		let filename = generateJsonFilename(title);
+		let filePath = join(categoryDir, filename);
+		if (existsSync(filePath)) {
+			let counter = 2;
+			while (existsSync(join(categoryDir, filename.replace(/\.json$/, `-${counter}.json`)))) {
+				counter++;
+			}
+			filename = filename.replace(/\.json$/, `-${counter}.json`);
+			filePath = join(categoryDir, filename);
+		}
+
+		writeFileSync(
+			filePath,
+			`${JSON.stringify(
+				{
+					metadata: {
+						title,
+						category: "results",
+						timestamp: new Date().toISOString(),
+						sessionId: this.sessionId,
+						...metadata,
+					},
+					data,
+				},
+				null,
+				2,
+			)}\n`,
+			"utf-8",
+		);
 		return filePath;
 	}
 

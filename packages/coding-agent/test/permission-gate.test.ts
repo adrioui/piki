@@ -247,5 +247,65 @@ describe("permission-gate", () => {
 			expect(decision.action).toBe("delegate");
 			expect(decision.reason).toContain("not supported");
 		});
+
+		// --- Role policy threading ---
+
+		it("applies role policy rules when roleId and rolePolicyRules are provided", () => {
+			const rolePolicy: PermissionRule[] = [{ tool: "write", action: "reject", message: "Writes blocked by role" }];
+			const decision = evaluatePermission(
+				"write",
+				{ path: "/tmp/foo.ts" },
+				{ roleId: "worker", rolePolicyRules: rolePolicy, interactive: false },
+			);
+			expect(decision.permitted).toBe(false);
+			expect(decision.source).toBe("role");
+			expect(decision.reason).toContain("role");
+		});
+
+		it("role policy source is 'role' when matched", () => {
+			const rolePolicy: PermissionRule[] = [{ tool: "bash", action: "reject", message: "Bash blocked by role" }];
+			const decision = evaluatePermission(
+				"bash",
+				{ command: "ls" },
+				{ roleId: "worker", rolePolicyRules: rolePolicy, interactive: false },
+			);
+			expect(decision.permitted).toBe(false);
+			expect(decision.source).toBe("role");
+		});
+
+		it("backward compat: no roleId skips role policy entirely", () => {
+			const rolePolicy: PermissionRule[] = [{ tool: "write", action: "reject", message: "Should not apply" }];
+			// No roleId: role policy is skipped, falls through to built-in allow for write
+			const decision = evaluatePermission(
+				"write",
+				{ path: "/tmp/foo.ts" },
+				{ rolePolicyRules: rolePolicy, interactive: false },
+			);
+			expect(decision.permitted).toBe(true);
+			expect(decision.source).toBe("built-in");
+		});
+
+		it("backward compat: no rolePolicyRules skips role policy even with roleId", () => {
+			// roleId set but no rolePolicyRules: role policy is skipped
+			const decision = evaluatePermission(
+				"write",
+				{ path: "/tmp/foo.ts" },
+				{ roleId: "worker", interactive: false },
+			);
+			expect(decision.permitted).toBe(true);
+			expect(decision.source).toBe("built-in");
+		});
+
+		it("user rules take precedence over role policy rules", () => {
+			const userRules: PermissionRule[] = [{ tool: "write", action: "allow", message: "Admin override" }];
+			const rolePolicy: PermissionRule[] = [{ tool: "write", action: "reject", message: "Role denies write" }];
+			const decision = evaluatePermission(
+				"write",
+				{ path: "/tmp/foo.ts" },
+				{ userRules, roleId: "worker", rolePolicyRules: rolePolicy, interactive: false },
+			);
+			expect(decision.permitted).toBe(true);
+			expect(decision.source).toBe("user");
+		});
 	});
 });

@@ -2,7 +2,7 @@
  * CLI argument parsing and help display
  */
 
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { ThinkingLevel } from "@piki/agent-core";
 import chalk from "chalk";
 import { APP_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
@@ -39,6 +39,8 @@ export interface Args {
 	print?: boolean;
 	export?: string;
 	atif?: string;
+	/** ATIF schema shape: "pi" (default) or "magnitude" (Magnitude-compatible) */
+	atifSchema?: "pi" | "magnitude";
 	noSkills?: boolean;
 	skills?: string[];
 	promptTemplates?: string[];
@@ -48,6 +50,12 @@ export interface Args {
 	noContextFiles?: boolean;
 	listModels?: string | true;
 	offline?: boolean;
+	/** Read-only HTTP serve mode */
+	serve?: boolean;
+	/** Port for serve mode */
+	port?: number;
+	/** Host for serve mode */
+	host?: string;
 	verbose?: boolean;
 	projectTrustOverride?: boolean;
 	messages: string[];
@@ -161,6 +169,16 @@ export function parseArgs(args: string[]): Args {
 			result.export = args[++i];
 		} else if (arg === "--atif" && i + 1 < args.length) {
 			result.atif = args[++i];
+		} else if (arg === "--atif-schema" && i + 1 < args.length) {
+			const schema = args[++i];
+			if (schema === "pi" || schema === "magnitude") {
+				result.atifSchema = schema;
+			} else {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid ATIF schema "${schema}". Valid values: pi, magnitude`,
+				});
+			}
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
 			result.extensions = result.extensions ?? [];
 			result.extensions.push(args[++i]);
@@ -198,6 +216,12 @@ export function parseArgs(args: string[]): Args {
 			result.projectTrustOverride = false;
 		} else if (arg === "--offline") {
 			result.offline = true;
+		} else if (arg === "serve") {
+			result.serve = true;
+		} else if (arg === "--port" && i + 1 < args.length) {
+			result.port = parseInt(args[++i], 10);
+		} else if (arg === "--host" && i + 1 < args.length) {
+			result.host = args[++i];
 		} else if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
@@ -293,7 +317,7 @@ ${chalk.bold("Options:")}
   --verbose                      Force verbose startup (overrides quietStartup setting)
   --approve, -a                  Trust project-local files for this run
   --no-approve, -na              Ignore project-local files for this run
-  --offline                      Disable startup network operations (same as PI_OFFLINE=1)
+  --offline                      Disable startup network operations (same as PIKI_OFFLINE=1)
   --help, -h                     Show this help
   --version, -v                  Show version number
 
@@ -400,10 +424,10 @@ ${chalk.bold("Environment Variables:")}
   AWS_REGION                       - AWS region for Amazon Bedrock (e.g., us-east-1)
   ${ENV_AGENT_DIR.padEnd(32)} - Config directory (default: ~/${CONFIG_DIR_NAME}/agent)
   ${ENV_SESSION_DIR.padEnd(32)} - Session storage directory (overridden by --session-dir)
-  PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
-  PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
-  PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+  PIKI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
+  PIKI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+  PIKI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
+  PIKI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://piki.run/session/)
 
 ${chalk.bold("Built-in Tool Names:")}
   read   - Read file contents

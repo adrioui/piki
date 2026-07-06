@@ -175,7 +175,7 @@ export function isOpenSourceExplicitVariant(variant: PromptVariant | undefined):
 /**
  * Classify a model's lineage. Classification is structural (provider id +
  * model id + model display name) so it can be unit-tested without depending on
- * the Model type from @earendil-works/pi-ai.
+ * the Model type from @piki/ai.
  *
  * Order of precedence:
  * 1. Model id/name fragments (strong signal of the actual lineage; works for

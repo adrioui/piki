@@ -15,16 +15,9 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import type {
-	Agent,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	ThinkingLevel,
-} from "@earendil-works/pi-agent-core";
-import { composePayloadHooks, createGrammarInjector, createStructuredOutputInjector } from "@earendil-works/pi-ai";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@earendil-works/pi-ai/compat";
+import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@piki/agent-core";
+import { composePayloadHooks, createGrammarInjector, createStructuredOutputInjector } from "@piki/ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@piki/ai/compat";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -33,13 +26,15 @@ import {
 	modelsAreEqual,
 	resetApiProviders,
 	streamSimple,
-} from "@earendil-works/pi-ai/compat";
+} from "@piki/ai/compat";
+import { Effect } from "effect";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { handleTasteCommand } from "../taste-cli.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
 import { formatToolResultForModel } from "./activity-formatter.ts";
+import { decideAssistantCommit } from "./assistant-commit-policy.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
@@ -54,7 +49,9 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { expandAtFileIncludes } from "./context-includes.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import { EpochInterruptCoordinator } from "./epoch-interrupt-coordinator.ts";
 import { ErrorRepeatGuard } from "./error-repeat-guard.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -94,17 +91,20 @@ import { evaluatePermission, type PermissionDecision, type PermissionRule } from
 import { classifyPromptVariant } from "./prompt-family.ts";
 import { expandPromptTemplate, type PromptTemplate, parseCommandArgs } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
+import type { SkillFilterRole } from "./role-context.ts";
 import { LEADER_PROMPT } from "./role-prompts/leader.ts";
-import { ScratchpadManager } from "./scratchpad-manager.ts";
-import { SessionCancellationScope } from "./session-cancellation-scope.ts";
+import type { ScratchpadManager } from "./scratchpad-manager.ts";
+import type { SessionCancellationScope } from "./session-cancellation-scope.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import { readSessionContext } from "./session-reader.ts";
+import { createSessionRuntimeServices, type SessionRuntimeServicesShape } from "./session-runtime-services.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createCheckpointId, createSnapshot, isGitRepo } from "./snapshot.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import { generateSessionTitle, type TitleWorkerEvent } from "./title-worker.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createCheckpointChangesToolDefinition } from "./tools/checkpoint-changes.ts";
 import { createCreateTaskToolDefinition } from "./tools/create-task.ts";
@@ -354,11 +354,12 @@ export class AgentSession {
 	private _retryAttempt = 0;
 	private _errorRepeatGuard = new ErrorRepeatGuard();
 	private _continueTracker = new IdenticalContinueTracker();
+	private readonly _epochCoordinator = new EpochInterruptCoordinator();
 
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
-	private readonly _cancellationScope = new SessionCancellationScope();
+	private readonly _cancellationScope: SessionCancellationScope;
 
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
@@ -407,9 +408,21 @@ export class AgentSession {
 
 	// Scratchpad state
 	private _scratchpad: ScratchpadManager;
+	private _runtimeServices: SessionRuntimeServicesShape;
 
 	// Guidance discovery state (Phase 2)
 	private _touchedFiles: Set<string> = new Set();
+	private _skillFilterRole: SkillFilterRole | undefined;
+
+	/**
+	 * Set the role for skill filtering in the system prompt.
+	 * When set, only skills visible to this role are included.
+	 */
+	setSkillFilterRole(role: SkillFilterRole | undefined): void {
+		this._skillFilterRole = role;
+		this._baseSystemPrompt = this._rebuildSystemPrompt(this.getActiveToolNames());
+		this.agent.state.systemPrompt = this._baseSystemPrompt;
+	}
 
 	constructor(config: AgentSessionConfig) {
 		this.agent = config.agent;
@@ -433,16 +446,19 @@ export class AgentSession {
 			reason: "startup",
 		};
 
-		// Initialize scratchpad manager
-		this._scratchpad = new ScratchpadManager({
-			rootDir: join(config.cwd, ".pi", "scratchpad"),
-			autoCreate: true,
+		this._runtimeServices = createSessionRuntimeServices({
+			cwd: config.cwd,
+			sessionId: this.sessionId,
+			publishRuntimeEvent: (type, payload) => this.emitRuntimeEvent({ type, payload }),
 		});
+		this._scratchpad = this._runtimeServices.scratchpad;
+		this._cancellationScope = this._runtimeServices.cancellationScope;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
+		this._installEpochCheck();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -519,6 +535,7 @@ export class AgentSession {
 				interactive,
 				context: "thread",
 				knownTools,
+				roleId: undefined,
 			});
 
 			let permissionOverrideAllowed = false;
@@ -680,7 +697,11 @@ export class AgentSession {
 				};
 			}
 
-			const formattedContent = formatToolResultForModel(toolCall.name, args, result, isError);
+			const resultSidecarPath = this._persistToolResultSidecar(toolCall.id, toolCall.name, args, result, isError);
+			const formattedContent = this._withToolResultSidecarNote(
+				formatToolResultForModel(toolCall.name, args, result, isError),
+				this._shouldExposeToolResultSidecar(result) ? resultSidecarPath : undefined,
+			);
 
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_result")) {
@@ -721,6 +742,72 @@ export class AgentSession {
 				isError: hookResult.isError ?? isError,
 			};
 		};
+	}
+
+	/** Token captured at the start of each turn, used by the agent loop to detect staleness. */
+	private _turnEpochToken: ReturnType<EpochInterruptCoordinator["captureToken"]> | undefined;
+
+	/**
+	 * Wire the epoch staleness check into the agent loop.
+	 * The agent loop calls checkEpoch at key points (after streaming, after tool
+	 * execution, before continuing) to detect stale results from interrupted turns.
+	 * The token is captured once at turn start (in prompt()) and checked throughout.
+	 */
+	private _installEpochCheck(): void {
+		this.agent.checkEpoch = () => {
+			const token = this._turnEpochToken;
+			if (!token) return true;
+			return this._epochCoordinator.isTokenCurrent(token);
+		};
+	}
+
+	private _persistToolResultSidecar(
+		toolCallId: string,
+		toolName: string,
+		args: unknown,
+		result: { content: unknown; details?: unknown },
+		isError: boolean,
+	): string | undefined {
+		try {
+			return Effect.runSync(
+				this._runtimeServices.saveToolResultSidecar({
+					toolCallId,
+					toolName,
+					args,
+					result,
+					isError,
+				}),
+			);
+		} catch {
+			return undefined;
+		}
+	}
+
+	private _withToolResultSidecarNote(
+		content: (TextContent | ImageContent)[] | undefined,
+		resultSidecarPath: string | undefined,
+	): (TextContent | ImageContent)[] | undefined {
+		if (!content || !resultSidecarPath) return content;
+		return content.map((part, index) =>
+			index === content.length - 1 && part.type === "text"
+				? {
+						...part,
+						text: `${part.text ?? ""}\n\n[Full tool result saved to: ${resultSidecarPath}]`,
+					}
+				: part,
+		);
+	}
+
+	private _shouldExposeToolResultSidecar(result: { content: unknown; details?: unknown }): boolean {
+		const textBytes = Array.isArray(result.content)
+			? result.content.reduce((total, part) => {
+					if (part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part) {
+						return total + Buffer.byteLength(typeof part.text === "string" ? part.text : "", "utf-8");
+					}
+					return total;
+				}, 0)
+			: 0;
+		return textBytes > 100 * 1024;
 	}
 
 	// =========================================================================
@@ -792,6 +879,32 @@ export class AgentSession {
 		// final run or they can collapse/summarize before failover retries happen.
 		if (event.type !== "agent_end" || !willRetry) {
 			await this._emitExtensionEvent(event);
+		}
+
+		// Clear the epoch token when the agent run completes (no more retry pending)
+		if (event.type === "agent_end" && !willRetry) {
+			this._turnEpochToken = undefined;
+
+			// Trigger title generation after the first turn completes.
+			// This fires-and-forgets: title generation is non-blocking.
+			// Use <= 2 to handle cases where the first prompt is tool-call-only
+			// (title text arrives on the second agent_end within the first turn).
+			// generateSessionTitle already guards against duplicate titles.
+			if (this._turnIndex <= 2) {
+				generateSessionTitle({
+					sessionManager: this.sessionManager,
+					modelRegistry: this._modelRegistry,
+					settingsManager: this.settingsManager,
+					onEvent: (e: TitleWorkerEvent) => {
+						this.emitRuntimeEvent({
+							type: `title.${e.type}`,
+							payload: e as unknown as Record<string, unknown>,
+						});
+					},
+				}).catch(() => {
+					// Title generation is best-effort; swallow errors.
+				});
+			}
 		}
 
 		// Notify all listeners
@@ -1026,13 +1139,13 @@ export class AgentSession {
 			this.abortBranchSummary();
 			this.abortBash();
 			this.agent.abort();
-			this._cancellationScope.close();
+			Effect.runSync(this._runtimeServices.close());
 		} catch {
 			// Dispose must succeed even if an abort hook throws.
 		}
 
 		this._extensionRunner.invalidate(
-			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
+			"This extension ctx is stale after session replacement or reload. Do not use a captured piki or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
 		this._disconnectFromAgent();
 		this._eventListeners = [];
@@ -1061,6 +1174,10 @@ export class AgentSession {
 	/** Whether agent is currently streaming a response */
 	get isStreaming(): boolean {
 		return this.agent.state.isStreaming;
+	}
+
+	get turnEpoch(): number {
+		return this._epochCoordinator.current().value;
 	}
 
 	/** Wait until the full session turn is idle, including auto-retry backoff/continuations. */
@@ -1284,6 +1401,7 @@ export class AgentSession {
 			provider: this.model?.provider,
 			modelId: this.model?.id,
 			modelName: this.model?.name,
+			role: this._skillFilterRole,
 		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
 	}
@@ -1535,6 +1653,7 @@ export class AgentSession {
 			if (expandPromptTemplates) {
 				expandedText = this._expandSkillCommand(expandedText);
 				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+				expandedText = this._expandPromptFileMentions(expandedText);
 			}
 
 			// If streaming, queue via steer() or followUp() based on option
@@ -1645,6 +1764,8 @@ export class AgentSession {
 		}
 
 		preflightResult?.(true);
+		Effect.runSync(this._epochCoordinator.beginTurn());
+		this._turnEpochToken = this._epochCoordinator.captureToken();
 
 		// Wire up session ID on scratchpad for artifact metadata tracing
 		this._scratchpad.setSessionId(this.sessionId);
@@ -1730,6 +1851,18 @@ export class AgentSession {
 			});
 			return text; // Return original on error
 		}
+	}
+
+	private _expandPromptFileMentions(text: string): string {
+		if (!text.includes("@")) return text;
+		const result = expandAtFileIncludes(text, join(this._cwd, ".piki-prompt.md"));
+		for (const warning of result.warnings) {
+			this.emitRuntimeEvent({
+				type: "prompt.file_include_warning",
+				payload: { warning },
+			});
+		}
+		return result.content;
 	}
 
 	/**
@@ -1950,6 +2083,8 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		Effect.runSync(this._epochCoordinator.interrupt("abort"));
+		this._turnEpochToken = undefined;
 		this.abortRetry();
 		this.agent.abort();
 		await this.agent.waitForIdle();
@@ -3177,26 +3312,15 @@ export class AgentSession {
 	 * Context overflow errors are NOT retryable (handled by compaction instead).
 	 */
 	private _isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error" || !message.errorMessage) return false;
-
-		// Context overflow is handled by compaction, not retry
-		const contextWindow = this.model?.contextWindow ?? 0;
-		if (isContextOverflow(message, contextWindow)) return false;
-
-		// Tool validation errors are always retryable with immediate retry (no backoff)
-		if (message.errorMessage.startsWith("tool_validation:")) return true;
-
-		const err = message.errorMessage;
-		if (this._isNonRetryableProviderLimitError(err)) return false;
-
-		const classification = classifyError(err);
-		if (
-			!classification.retryable &&
-			this._modelRegistry.shouldRetryProviderApiKeyFailure(message.provider, classification.category)
-		) {
-			return true;
-		}
-		return classification.retryable;
+		const decision = decideAssistantCommit({
+			message,
+			contextWindow: this.model?.contextWindow ?? 0,
+			isNonRetryableProviderLimitError: (errorMessage) => this._isNonRetryableProviderLimitError(errorMessage),
+			isProviderApiKeyRetryable: (provider, category) =>
+				this._modelRegistry.shouldRetryProviderApiKeyFailure(provider, category),
+			classifyError,
+		});
+		return decision.retryable;
 	}
 
 	/**
@@ -3355,6 +3479,9 @@ export class AgentSession {
 			cancelled: result.cancelled,
 			truncated: result.truncated,
 			fullOutputPath: result.fullOutputPath,
+			startedAt: result.startedAt,
+			endedAt: result.endedAt,
+			durationMs: result.durationMs,
 			timestamp: Date.now(),
 			excludeFromContext: options?.excludeFromContext,
 		};

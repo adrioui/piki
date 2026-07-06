@@ -5,7 +5,7 @@
  * artifact storage for designs, plans, reports, and results.
  */
 
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@piki/agent-core";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import type { ScratchpadArtifact, ScratchpadCategory, ScratchpadManager } from "../scratchpad-manager.ts";

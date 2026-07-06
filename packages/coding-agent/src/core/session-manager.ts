@@ -1,5 +1,5 @@
-import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import { type AgentMessage, uuidv7 } from "@piki/agent-core";
+import type { ImageContent, Message, TextContent } from "@piki/ai";
 import { randomUUID } from "crypto";
 import {
 	appendFileSync,
@@ -9,6 +9,7 @@ import {
 	mkdirSync,
 	openSync,
 	readdirSync,
+	readFileSync,
 	readSync,
 	statSync,
 	writeFileSync,
@@ -181,6 +182,21 @@ export interface SessionInfo {
 	messageCount: number;
 	firstMessage: string;
 	allMessagesText: string;
+}
+
+export interface SessionMeta {
+	sessionId: string;
+	created: string;
+	updated: string;
+	cwd: string;
+	name?: string;
+	firstUserMessage: string;
+	lastMessage: string;
+	messageCount: number;
+	parentSessionPath?: string;
+	initialVersion?: string;
+	lastActiveVersion?: string;
+	allMessagesText?: string;
 }
 
 export type ReadonlySessionManager = Pick<
@@ -434,7 +450,7 @@ export function buildSessionContext(
 
 /**
  * Compute the default session directory for a cwd.
- * Encodes cwd into a safe directory name under ~/.pi/agent/sessions/.
+ * Encodes cwd into a safe directory name under ~/.piki/agent/sessions/.
  */
 function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgentDir()): string {
 	const resolvedCwd = resolvePath(cwd);
@@ -573,6 +589,10 @@ function extractTextContent(message: Message): string {
 		.join(" ");
 }
 
+function sidecarPathForSessionFile(filePath: string, suffix: string): string {
+	return filePath.endsWith(".jsonl") ? filePath.slice(0, -".jsonl".length) + suffix : `${filePath}${suffix}`;
+}
+
 function getMessageActivityTime(entry: SessionMessageEntry): number | undefined {
 	const message = entry.message;
 	if (!isMessageWithContent(message)) return undefined;
@@ -590,9 +610,26 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
+		const meta = readSessionMeta(filePath);
+		if (meta) {
+			return {
+				path: filePath,
+				id: meta.sessionId,
+				cwd: meta.cwd,
+				name: meta.name,
+				parentSessionPath: meta.parentSessionPath,
+				created: new Date(meta.created),
+				modified: new Date(meta.updated),
+				messageCount: meta.messageCount,
+				firstMessage: meta.firstUserMessage || "(no messages)",
+				allMessagesText:
+					meta.allMessagesText ?? [meta.firstUserMessage, meta.lastMessage].filter(Boolean).join(" "),
+			};
+		}
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
 		let firstMessage = "";
+		let lastMessage = "";
 		const allMessages: string[] = [];
 		let name: string | undefined;
 		let lastActivityTime: number | undefined;
@@ -636,6 +673,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			if (!firstMessage && message.role === "user") {
 				firstMessage = textContent;
 			}
+			lastMessage = textContent;
 		}
 
 		if (!header) return null;
@@ -650,7 +688,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 					? new Date(headerTime)
 					: stats.mtime;
 
-		return {
+		const info = {
 			path: filePath,
 			id: header.id,
 			cwd,
@@ -662,8 +700,53 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.join(" "),
 		};
+		writeSessionMeta(filePath, {
+			sessionId: header.id,
+			created: header.timestamp,
+			updated: info.modified.toISOString(),
+			cwd,
+			name,
+			firstUserMessage: firstMessage,
+			lastMessage,
+			messageCount,
+			parentSessionPath,
+			initialVersion: String(header.version ?? 1),
+			lastActiveVersion: String(CURRENT_SESSION_VERSION),
+			allMessagesText: info.allMessagesText,
+		});
+		return info;
 	} catch {
 		return null;
+	}
+}
+
+function readSessionMeta(filePath: string): SessionMeta | undefined {
+	try {
+		const metaPath = sidecarPathForSessionFile(filePath, ".meta.json");
+		if (!existsSync(metaPath)) return undefined;
+		const parsed = JSON.parse(readFileSync(metaPath, "utf-8")) as Partial<SessionMeta>;
+		if (
+			typeof parsed.sessionId !== "string" ||
+			typeof parsed.created !== "string" ||
+			typeof parsed.updated !== "string" ||
+			typeof parsed.cwd !== "string" ||
+			typeof parsed.firstUserMessage !== "string" ||
+			typeof parsed.lastMessage !== "string" ||
+			typeof parsed.messageCount !== "number"
+		) {
+			return undefined;
+		}
+		return parsed as SessionMeta;
+	} catch {
+		return undefined;
+	}
+}
+
+function writeSessionMeta(filePath: string, meta: SessionMeta): void {
+	try {
+		writeFileSync(sidecarPathForSessionFile(filePath, ".meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+	} catch {
+		// Metadata is an optimization sidecar; session JSONL remains authoritative.
 	}
 }
 
@@ -884,6 +967,7 @@ export class SessionManager {
 		} finally {
 			closeSync(fd);
 		}
+		this.writeMetaSidecar();
 	}
 
 	isPersisted(): boolean {
@@ -938,6 +1022,7 @@ export class SessionManager {
 			return;
 		}
 		appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
+		this.writeMetaSidecar();
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
@@ -945,6 +1030,59 @@ export class SessionManager {
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
 		this._persist(entry);
+	}
+
+	private buildMetaSidecar(): SessionMeta | undefined {
+		const header = this.getHeader();
+		const sessionFile = this.getSessionFile();
+		if (!header || !sessionFile) return undefined;
+		let name: string | undefined;
+		let firstUserMessage = "";
+		let lastMessage = "";
+		let messageCount = 0;
+		let updatedMs = new Date(header.timestamp).getTime();
+		const allMessages: string[] = [];
+		for (const entry of this.getEntries()) {
+			const entryTime = new Date(entry.timestamp).getTime();
+			if (!Number.isNaN(entryTime)) updatedMs = Math.max(updatedMs, entryTime);
+			if (entry.type === "session_info") {
+				name = entry.name?.trim() || undefined;
+				continue;
+			}
+			if (entry.type !== "message") continue;
+			messageCount++;
+			const message = entry.message;
+			if (!isMessageWithContent(message)) continue;
+			if (message.role !== "user" && message.role !== "assistant") continue;
+			const textContent = extractTextContent(message);
+			if (!textContent) continue;
+			allMessages.push(textContent);
+			if (!firstUserMessage && message.role === "user") firstUserMessage = textContent;
+			lastMessage = textContent;
+			const activityTime = getMessageActivityTime(entry);
+			if (typeof activityTime === "number") updatedMs = Math.max(updatedMs, activityTime);
+		}
+		return {
+			sessionId: header.id,
+			created: header.timestamp,
+			updated: new Date(updatedMs).toISOString(),
+			cwd: typeof header.cwd === "string" ? header.cwd : "",
+			name,
+			firstUserMessage,
+			lastMessage,
+			messageCount,
+			parentSessionPath: header.parentSession,
+			initialVersion: String(header.version ?? 1),
+			lastActiveVersion: String(CURRENT_SESSION_VERSION),
+			allMessagesText: allMessages.join(" "),
+		};
+	}
+
+	private writeMetaSidecar(): void {
+		const sessionFile = this.getSessionFile();
+		const meta = this.buildMetaSidecar();
+		if (!sessionFile || !meta) return;
+		writeSessionMeta(sessionFile, meta);
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1386,7 +1524,7 @@ export class SessionManager {
 	/**
 	 * Create a new session.
 	 * @param cwd Working directory (stored in session header)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.piki/agent/sessions/<encoded-cwd>/).
 	 */
 	static create(cwd: string, sessionDir?: string, options?: NewSessionOptions): SessionManager {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
@@ -1413,7 +1551,7 @@ export class SessionManager {
 	/**
 	 * Continue the most recent session, or create new if none.
 	 * @param cwd Working directory
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.piki/agent/sessions/<encoded-cwd>/).
 	 */
 	static continueRecent(cwd: string, sessionDir?: string): SessionManager {
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(cwd);
@@ -1493,7 +1631,7 @@ export class SessionManager {
 	/**
 	 * List all sessions for a directory.
 	 * @param cwd Working directory (used to compute default session directory)
-	 * @param sessionDir Optional session directory. If omitted, uses default (~/.pi/agent/sessions/<encoded-cwd>/).
+	 * @param sessionDir Optional session directory. If omitted, uses default (~/.piki/agent/sessions/<encoded-cwd>/).
 	 * @param onProgress Optional callback for progress updates (loaded, total)
 	 */
 	static async list(cwd: string, sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {

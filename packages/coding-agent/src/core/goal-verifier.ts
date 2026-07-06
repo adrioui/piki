@@ -10,7 +10,7 @@
  * is unavailable or times out).
  */
 
-import type { Message } from "@earendil-works/pi-ai";
+import type { Message } from "@piki/ai";
 import type { AgentSessionServices } from "./agent-session-services.ts";
 import { resolvePreferredAuxModel, runAuxModelText } from "./aux-model.ts";
 

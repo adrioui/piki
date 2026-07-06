@@ -1,9 +1,4 @@
-import {
-	type AssistantMessage,
-	createAssistantMessageEventStream,
-	fauxAssistantMessage,
-	type Model,
-} from "@earendil-works/pi-ai";
+import { type AssistantMessage, createAssistantMessageEventStream, fauxAssistantMessage, type Model } from "@piki/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
 import { createHarness, type Harness } from "./harness.ts";
@@ -100,8 +95,8 @@ describe("AgentSession compaction characterization", () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => ({
+				(piki) => {
+					piki.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "summary from extension",
 							firstKeptEntryId: event.preparation.firstKeptEntryId,
@@ -174,8 +169,8 @@ describe("AgentSession compaction characterization", () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => {
+				(piki) => {
+					piki.on("session_before_compact", async (event) => {
 						return await new Promise<{ cancel: true }>((resolve) => {
 							event.signal.addEventListener("abort", () => resolve({ cancel: true }), { once: true });
 						});
@@ -200,8 +195,8 @@ describe("AgentSession compaction characterization", () => {
 		const harness = await createHarness({
 			settings: { compaction: { keepRecentTokens: 1 } },
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => ({
+				(piki) => {
+					piki.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "auto compacted",
 							firstKeptEntryId: event.preparation.firstKeptEntryId,
@@ -261,8 +256,8 @@ describe("AgentSession compaction characterization", () => {
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
 			extensionFactories: [
-				(pi) => {
-					pi.on("session_before_compact", async (event) => ({
+				(piki) => {
+					piki.on("session_before_compact", async (event) => ({
 						compaction: {
 							summary: "successful overflow compacted",
 							firstKeptEntryId: event.preparation.firstKeptEntryId,

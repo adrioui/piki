@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), "pi-stdout-clean-"));
+	const dir = mkdtempSync(join(tmpdir(), "piki-stdout-clean-"));
 	tempDirs.push(dir);
 	return dir;
 }
@@ -25,7 +25,7 @@ async function runCli(args: string[]): Promise<{ stdout: string; stderr: string;
 	const tempRoot = createTempDir();
 	const agentDir = join(tempRoot, "agent");
 	const projectDir = join(tempRoot, "project");
-	const projectConfigDir = join(projectDir, ".pi");
+	const projectConfigDir = join(projectDir, ".piki");
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(projectConfigDir, { recursive: true });
 
@@ -124,5 +124,28 @@ describe("stdout cleanliness in non-interactive modes", () => {
 		expect(result.stderr).not.toContain("changed 1 package in 471ms");
 		expect(result.stderr).not.toContain("found 0 vulnerabilities");
 		expect(result.stderr).toContain("Usage:");
+	});
+
+	it("handles invalid mode gracefully without crashing", async () => {
+		const result = await runCli(["--mode", "invalid"]);
+
+		// Invalid mode is silently ignored, falls back to default
+		expect(result.code).not.toBeNull();
+	});
+
+	it("prints version with exit code 0", async () => {
+		const result = await runCli(["--version"]);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+		// No trailing newlines or extra content
+		expect(result.stdout.trim().split("\n")).toHaveLength(1);
+	});
+
+	it("-p with no message exits 0 without stdout", async () => {
+		const result = await runCli(["-p"]);
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe("");
 	});
 });

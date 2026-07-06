@@ -5,7 +5,7 @@
  * Returns structured results: Array<{ title, url, snippet }>
  */
 
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@piki/agent-core";
 import { type Static, Type } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { isBlockedUrlResolved } from "./web-fetch.ts";

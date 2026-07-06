@@ -1,7 +1,7 @@
 /**
  * WorkerSession - runs an LLM agent loop for a forked worker.
  *
- * Delegates to the full Agent class from @earendil-works/pi-agent-core,
+ * Delegates to the full Agent class from @piki/agent-core,
  * matching the leader's AgentSession pattern:
  * - Grammar injection (GBNF for open-weight models)
  * - Structured output injection (provider-native for frontier APIs)
@@ -11,6 +11,7 @@
  * - Lightweight compaction via transformContext
  */
 
+import { randomUUID } from "node:crypto";
 import {
 	type AfterToolCallResult,
 	Agent,
@@ -21,8 +22,9 @@ import {
 	type AgentToolUpdateCallback,
 	type BeforeToolCallResult,
 	type StreamFn,
-} from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+} from "@piki/agent-core";
+
+import type { Model } from "@piki/ai";
 import {
 	allowUnknownFieldsForStreaming,
 	composePayloadHooks,
@@ -31,19 +33,22 @@ import {
 	formatCorrectiveFeedback,
 	StreamingFieldParser,
 	typeboxToStreamingSchema,
-} from "@earendil-works/pi-ai";
-import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
-import { ROLE_DEFINITIONS } from "@earendil-works/pi-event-core";
+} from "@piki/ai";
+import type { AssistantMessage } from "@piki/ai/compat";
+import { ROLE_DEFINITIONS } from "@piki/event-core";
 import type { TSchema } from "typebox";
 import { ErrorRepeatGuard } from "./error-repeat-guard.ts";
 import { checkInputForGuardedPaths } from "./permissions/guarded-paths.ts";
 import { evaluatePermission, type PermissionRule } from "./permissions/permission-gate.ts";
+import { getRolePolicyRules } from "./permissions/role-policy.ts";
 import { setForkContext } from "./worker-executor.ts";
 
 export interface WorkerTool {
 	name: string;
 	description: string;
 	parameters: TSchema;
+	hidden?: boolean;
+	internal?: boolean;
 	prepareArguments?: (args: unknown) => unknown;
 	execute: (
 		id: string,
@@ -62,6 +67,8 @@ export interface WorkerSessionConfig {
 	initialMessage: string;
 	tools: WorkerTool[];
 	contextLimit: number;
+	cwd?: string;
+	scratchpadPath?: string;
 	maxTurns?: number;
 	userRules?: PermissionRule[];
 	streamFn?: StreamFn;
@@ -84,6 +91,18 @@ function toAgentTool(tool: WorkerTool): AgentTool {
 
 /** Mutating tools that need guarded-path checks. */
 const MUTATING_TOOLS = new Set(["edit", "write", "bash", "edit-diff", "restore_snapshot"]);
+const WORKER_MESSAGE_IDS = new WeakMap<object, string>();
+
+function getWorkerMessageId(message: AgentMessage): string {
+	if ("id" in message && typeof message.id === "string") {
+		return message.id;
+	}
+	const existing = WORKER_MESSAGE_IDS.get(message);
+	if (existing) return existing;
+	const id = randomUUID();
+	WORKER_MESSAGE_IDS.set(message, id);
+	return id;
+}
 
 export class WorkerSession {
 	private readonly config: WorkerSessionConfig;
@@ -263,6 +282,17 @@ export class WorkerSession {
 
 	private async handleAgentEvent(event: AgentEvent, _signal: AbortSignal): Promise<void> {
 		switch (event.type) {
+			case "message_start":
+				if (event.message.role === "assistant") {
+					await this.publishEvent("message_start", {
+						id: getWorkerMessageId(event.message),
+						messageId: getWorkerMessageId(event.message),
+						messageRole: "assistant",
+						destination: { kind: "coordinator" },
+					});
+				}
+				break;
+
 			case "message_update":
 				this.handleMessageUpdate(event);
 				break;
@@ -278,9 +308,12 @@ export class WorkerSession {
 					this.checkThinkingBudget(msg);
 					const text = this.extractText(msg);
 					await this.publishEvent("message_end", {
+						id: getWorkerMessageId(event.message),
+						messageId: getWorkerMessageId(event.message),
 						messageRole: "assistant",
 						text,
 						stopReason: msg.stopReason,
+						destination: { kind: "coordinator" },
 					});
 				} else if (event.message.role === "toolResult") {
 					const tr = event.message as { toolCallId: string; toolName: string; isError: boolean; content: unknown };
@@ -384,6 +417,15 @@ export class WorkerSession {
 				this.streamingParsers.delete(ended.toolCall.id);
 			}
 		}
+		const text = update.delta ?? "";
+		if (text) {
+			void this.publishEvent("message_chunk", {
+				id: getWorkerMessageId(event.message),
+				messageId: getWorkerMessageId(event.message),
+				text,
+				destination: { kind: "coordinator" },
+			}).catch(() => {});
+		}
 	}
 
 	private handleToolCallDelta(
@@ -469,6 +511,8 @@ export class WorkerSession {
 			context: "subagent",
 			knownTools: this.config.tools.map((t) => t.name),
 			userRules: this.config.userRules ?? [],
+			roleId: this.config.role,
+			rolePolicyRules: getRolePolicyRules(this.config.role, this.config.cwd, this.config.scratchpadPath),
 		});
 
 		if (!permissionDecision.permitted) {

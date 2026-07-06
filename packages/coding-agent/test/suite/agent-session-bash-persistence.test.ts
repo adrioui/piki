@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@piki/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@piki/ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BashOperations } from "../../src/core/tools/bash.ts";
@@ -102,7 +102,10 @@ describe("AgentSession bash and persistence characterization", () => {
 		const result = await harness.session.executeBash("printf 'hello'");
 
 		expect(result.output).toContain("hello");
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+		const message = harness.session.messages[harness.session.messages.length - 1];
+		expect(message?.role).toBe("bashExecution");
+		expect(result.durationMs).toBeGreaterThanOrEqual(0);
+		expect(message?.role === "bashExecution" ? message.durationMs : undefined).toBe(result.durationMs);
 	});
 
 	it("cancels running bash commands with abortBash", async () => {
@@ -158,8 +161,8 @@ describe("AgentSession bash and persistence characterization", () => {
 		});
 		await harness.session.prompt("start");
 
-		const entries = harness.sessionManager.getEntries();
-		expect(entries.map((entry) => entry.type)).toEqual([
+		const messageEntries = harness.sessionManager.getEntries().filter((entry) => entry.type !== "session_info");
+		expect(messageEntries.map((entry) => entry.type)).toEqual([
 			"custom_message",
 			"message",
 			"message",
@@ -214,12 +217,14 @@ describe("AgentSession bash and persistence characterization", () => {
 		await harness.session.abort();
 		await promptPromise;
 
-		const lastEntry = harness.sessionManager.getEntries()[harness.sessionManager.getEntries().length - 1];
-		expect(lastEntry?.type).toBe("message");
-		if (lastEntry?.type === "message") {
-			expect(lastEntry.message.role).toBe("assistant");
-			if (lastEntry.message.role === "assistant") {
-				expect(lastEntry.message.stopReason).toBe("aborted");
+		// Find the last message entry (title worker may add session_info after it)
+		const entries = harness.sessionManager.getEntries();
+		const lastMessageEntry = [...entries].reverse().find((e) => e.type === "message");
+		expect(lastMessageEntry).toBeDefined();
+		if (lastMessageEntry?.type === "message") {
+			expect(lastMessageEntry.message.role).toBe("assistant");
+			if (lastMessageEntry.message.role === "assistant") {
+				expect(lastMessageEntry.message.stopReason).toBe("aborted");
 			}
 		}
 	});

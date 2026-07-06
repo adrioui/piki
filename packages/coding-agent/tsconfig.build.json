@@ -3,14 +3,14 @@
 	"compilerOptions": {
 		"outDir": "./dist",
 		"paths": {
-			"@earendil-works/pi-agent-core": ["../agent/dist/index.d.ts"],
-			"@earendil-works/pi-agent-core/*": ["../agent/dist/*.d.ts"],
-			"@earendil-works/pi-ai": ["../ai/dist/index.d.ts"],
-			"@earendil-works/pi-ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
-			"@earendil-works/pi-event-core": ["../event-core/dist/index.d.ts"],
-			"@earendil-works/pi-event-core/*": ["../event-core/dist/*.d.ts"],
-			"@earendil-works/pi-tui": ["../tui/dist/index.d.ts"],
-			"@earendil-works/pi-tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
+			"@piki/agent-core": ["../agent/dist/index.d.ts"],
+			"@piki/agent-core/*": ["../agent/dist/*.d.ts"],
+			"@piki/ai": ["../ai/dist/index.d.ts"],
+			"@piki/ai/*": ["../ai/dist/*.d.ts", "../ai/dist/providers/*.d.ts"],
+			"@piki/event-core": ["../event-core/dist/index.d.ts"],
+			"@piki/event-core/*": ["../event-core/dist/*.d.ts"],
+			"@piki/tui": ["../tui/dist/index.d.ts"],
+			"@piki/tui/*": ["../tui/dist/*.d.ts", "../tui/dist/components/*.d.ts"]
 		},
 		"rootDir": "./src"
 	},

@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "@piki/agent-core";
+import type { ImageContent, TextContent } from "@piki/ai";
 import chalk from "chalk";
 import { writeFile } from "fs/promises";
 import { ENV_SESSION_DIR, expandTildePath } from "./config.ts";

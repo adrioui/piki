@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, platform, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "@piki/agent-core";
+import {
+	createOutboundMessagesProjection,
+	createTaskWorkerProjection,
+	createTaskWorkerRole,
+	createWorkerActivityProjection,
+} from "@piki/agent-core";
 import {
 	allowUnknownFieldsForStreaming,
 	formatCorrectiveFeedback,
@@ -11,21 +17,22 @@ import {
 	registerSessionResourceCleanup,
 	StreamingFieldParser,
 	typeboxToStreamingSchema,
-} from "@earendil-works/pi-ai";
-import type { AssistantMessage } from "@earendil-works/pi-ai/compat";
+} from "@piki/ai";
+import type { AssistantMessage } from "@piki/ai/compat";
 import {
 	createBuiltinExtendedProjections,
 	createBuiltinWorkers,
 	createCheckpointProjection,
 	createGoalProjection,
 	createTaskGraphProjection,
+	createUserMessageResolutionProjection,
 	DefaultEventSink,
 	type EventEnvelope,
 	ForkedProjectionStore,
 	JsonlEventStore,
 	type ProjectionDefinition,
 	type RoleDefinition,
-} from "@earendil-works/pi-event-core";
+} from "@piki/event-core";
 import { Effect, Exit, type Fiber, Queue, Scope } from "effect";
 import { AgentModelResolver } from "./agent-model-resolver.ts";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
@@ -109,6 +116,7 @@ interface SessionRuntimeMeta {
 
 const ORCHESTRATORS = new Map<string, SessionOrchestrator>();
 let CLEANUP_REGISTERED = false;
+const MESSAGE_IDS = new WeakMap<object, string>();
 
 function ensureCleanupRegistered(): void {
 	if (CLEANUP_REGISTERED) return;
@@ -417,8 +425,26 @@ function isAssistantMessage(message: AgentMessage): message is AssistantMessage 
 	return message.role === "assistant";
 }
 
-function messagePayload(message: AgentMessage): Record<string, unknown> {
-	const base = {
+function getMessageId(message: AgentMessage): string {
+	if ("id" in message && typeof message.id === "string") {
+		return message.id;
+	}
+	if (typeof message === "object" && message !== null) {
+		const existing = MESSAGE_IDS.get(message);
+		if (existing) return existing;
+		const id = randomUUID();
+		MESSAGE_IDS.set(message, id);
+		return id;
+	}
+	return randomUUID();
+}
+
+function messagePayload(message: AgentMessage, sessionId?: string): Record<string, unknown> {
+	const base: Record<string, unknown> = {
+		id: getMessageId(message),
+		messageId: getMessageId(message),
+		forkId: sessionId,
+		destination: message.role === "assistant" ? { kind: "user" } : { kind: "coordinator" },
 		role: message.role,
 		text: textFromMessage(message),
 		timestamp: "timestamp" in message ? message.timestamp : Date.now(),
@@ -533,9 +559,17 @@ export class SessionOrchestrator {
 		this.forkedProjectionStore.registerGlobal(createGoalProjection<RuntimeEvent>());
 		this.forkedProjectionStore.registerGlobal(createTaskGraphProjection<RuntimeEvent>());
 		this.forkedProjectionStore.registerGlobal(createCheckpointProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerGlobal(createUserMessageResolutionProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerGlobal(createTaskWorkerProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerGlobal(createWorkerActivityProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerGlobal(createOutboundMessagesProjection<RuntimeEvent>());
 		this.forkedProjectionStore.registerForked(createGoalProjection<RuntimeEvent>());
 		this.forkedProjectionStore.registerForked(createTaskGraphProjection<RuntimeEvent>());
 		this.forkedProjectionStore.registerForked(createCheckpointProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerForked(createUserMessageResolutionProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerForked(createTaskWorkerProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerForked(createWorkerActivityProjection<RuntimeEvent>());
+		this.forkedProjectionStore.registerForked(createOutboundMessagesProjection<RuntimeEvent>());
 		if (this.existingEvents.length > 0) {
 			this.sink.replay(this.existingEvents);
 			const lastEvent = this.existingEvents[this.existingEvents.length - 1];
@@ -588,9 +622,16 @@ export class SessionOrchestrator {
 				const resolver = new AgentModelResolver(this.services);
 				return resolver.resolve(role) as Model<string> | undefined;
 			},
+			// Reuse the leader's streamFn so workers resolve API keys, headers, env,
+			// and retry settings exactly like the leader (it calls
+			// modelRegistry.getApiKeyAndHeaders(model) per call). Without this,
+			// workers fall back to bare streamSimple and throw for key-based providers.
+			streamFn: this.session.agent.streamFn,
 			getSystemPrompt: (role: string) => getSystemPrompt(role),
 			getAllTools: () => this.session.getExecutableWorkerTools(),
 			getProjectContext: () => collectFolderStructure(this.session.sessionManager.getCwd()),
+			cwd: this.session.sessionManager.getCwd(),
+			scratchpadPath: join(this.session.sessionManager.getCwd(), ".piki", "scratchpad"),
 			getTranscript: () =>
 				this.session.agent.state.messages
 					.slice(-10)
@@ -727,12 +768,15 @@ export class SessionOrchestrator {
 				folderStructure: collectFolderStructure(cwd),
 				agentsFile: collectAgentsFile(cwd),
 				skills: [],
-				scratchpadPath: join(cwd, ".pi", "scratchpad"),
+				scratchpadPath: join(cwd, ".piki", "scratchpad"),
 			});
 		}
 
 		// Phase 6: Initialize autopilot state from env var
-		if (process.env.PI_ENABLE_AUTOPILOT === "1" && !this.existingEvents.some((e) => e.type === "autopilot_toggled")) {
+		if (
+			process.env.PIKI_ENABLE_AUTOPILOT === "1" &&
+			!this.existingEvents.some((e) => e.type === "autopilot_toggled")
+		) {
 			await this.publishRuntimeEvent("autopilot_toggled", {
 				enabled: true,
 				reason: "env_init",
@@ -917,7 +961,7 @@ export class SessionOrchestrator {
 							"PUSH: challenge premature completion.",
 							"REFLECT: recall user requirements exactly.",
 							"INTERCEPT: catch rabbit holes and redirect to evidence.",
-							process.env.PI_ENABLE_AUTOPILOT === "1"
+							process.env.PIKI_ENABLE_AUTOPILOT === "1"
 								? "Autopilot is enabled. If no <message_advisor> context exists, speak as the user."
 								: "Autopilot is disabled. Include [AUTOPILOT_OFF] if the agent should not continue autonomously.",
 							"Write 3 to 6 short imperative bullets addressed to the agent.",
@@ -1061,6 +1105,7 @@ export class SessionOrchestrator {
 		this.sink.registerRole(turnPassRole);
 		this.sink.registerRole(taskDispatcherRole);
 		this.sink.registerRole(goalCompletionRole);
+		this.sink.registerRole(createTaskWorkerRole<RuntimeEvent>());
 	}
 
 	private async handleSessionEvent(event: AgentSessionEvent): Promise<void> {
@@ -1348,7 +1393,10 @@ export class SessionOrchestrator {
 				});
 				break;
 			case "message_start":
-				next(event.message.role === "user" ? "user_message" : "message_start", messagePayload(event.message));
+				next(
+					event.message.role === "user" ? "user_message" : "message_start",
+					messagePayload(event.message, this.session.sessionId),
+				);
 				break;
 			case "message_update": {
 				const update = event.assistantMessageEvent as {
@@ -1361,12 +1409,16 @@ export class SessionOrchestrator {
 				else if (update.type === "thinking_end") next("thinking_end", { text: update.content ?? "" });
 				else
 					next("message_chunk", {
+						id: getMessageId(event.message),
+						messageId: getMessageId(event.message),
+						forkId: this.session.sessionId,
+						destination: { kind: "user" },
 						text: update.delta ?? update.content ?? textFromMessage(event.message),
 					});
 				break;
 			}
 			case "message_end": {
-				const payload = messagePayload(event.message);
+				const payload = messagePayload(event.message, this.session.sessionId);
 				next("session.message_recorded", payload);
 				next("message_end", payload);
 				if (event.message.role === "assistant") {
@@ -1375,8 +1427,16 @@ export class SessionOrchestrator {
 							usage?: {
 								input?: number;
 								output?: number;
+								cacheRead?: number;
+								cacheWrite?: number;
 								totalTokens?: number;
-								cost?: { total?: number };
+								cost?: {
+									total?: number;
+									input?: number;
+									output?: number;
+									cacheRead?: number;
+									cacheWrite?: number;
+								};
 							};
 						}
 					).usage;
@@ -1384,8 +1444,27 @@ export class SessionOrchestrator {
 						next("usage_recorded", {
 							inputTokens: usage.input ?? 0,
 							outputTokens: usage.output ?? 0,
+							cacheReadTokens: usage.cacheRead ?? 0,
+							cacheWriteTokens: usage.cacheWrite ?? 0,
 							totalTokens: usage.totalTokens ?? 0,
 							cost: usage.cost?.total ?? 0,
+							costInput: usage.cost?.input ?? 0,
+							costOutput: usage.cost?.output ?? 0,
+							costCacheRead: usage.cost?.cacheRead ?? 0,
+							costCacheWrite: usage.cost?.cacheWrite ?? 0,
+						});
+					} else {
+						next("usage_recorded", {
+							inputTokens: 0,
+							outputTokens: 0,
+							cacheReadTokens: 0,
+							cacheWriteTokens: 0,
+							totalTokens: 0,
+							cost: 0,
+							missingReason:
+								(event.message as { stopReason?: string }).stopReason === "error"
+									? "stream_failed_before_usage"
+									: "usage_chunk_never_arrived",
 						});
 					}
 				}
@@ -1499,7 +1578,7 @@ export class SessionOrchestrator {
 				});
 				break;
 			default:
-				if (process.env.PI_DEBUG === "1") {
+				if (process.env.PIKI_DEBUG === "1") {
 					console.debug(`[orchestrator] Unhandled session event: ${event.type}`);
 				}
 				break;

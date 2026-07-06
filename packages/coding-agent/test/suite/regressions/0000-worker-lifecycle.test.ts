@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
-import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Model } from "@earendil-works/pi-ai";
+import type { AgentEvent, AgentMessage } from "@piki/agent-core";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Model } from "@piki/ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { DetachedProcessRegistry } from "../../../src/core/detached-process-registry.ts";
@@ -344,7 +344,7 @@ describe("worker coordination prompts", () => {
 
 describe("scratchpad_save", () => {
 	it("canonicalizes common category aliases before saving", async () => {
-		const rootDir = mkdtempSync(join(tmpdir(), "pi-scratchpad-test-"));
+		const rootDir = mkdtempSync(join(tmpdir(), "piki-scratchpad-test-"));
 		try {
 			const scratchpad = new ScratchpadManager({ rootDir });
 			const tool = createScratchpadSaveToolDefinition(scratchpad);
@@ -409,6 +409,13 @@ describe("filterToolsForRole", () => {
 			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
 		},
 		{
+			name: "grep",
+			description: "Hidden search",
+			parameters: Type.Object({}),
+			hidden: true,
+			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
+		},
+		{
 			name: "spawnWorker",
 			description: "Spawn a worker",
 			parameters: Type.Object({}),
@@ -427,6 +434,11 @@ describe("filterToolsForRole", () => {
 		expect(filtered.map((t) => t.name)).toContain("read");
 		expect(filtered.map((t) => t.name)).not.toContain("spawnWorker");
 		expect(filtered.map((t) => t.name)).not.toContain("killWorker");
+	});
+
+	it("omits hidden tools unless explicitly requested", () => {
+		expect(filterToolsForRole("scout", allTools).map((t) => t.name)).not.toContain("grep");
+		expect(filterToolsForRole("scout", allTools, { includeHidden: true }).map((t) => t.name)).toContain("grep");
 	});
 
 	it("critic gets read-only tool set", () => {

@@ -1,11 +1,6 @@
-import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
-	registerFauxProvider,
-} from "@earendil-works/pi-ai/compat";
+import type { AgentMessage, StreamFn } from "@piki/agent-core";
+import type { Model } from "@piki/ai";
+import { type AssistantMessage, type AssistantMessageEvent, EventStream, registerFauxProvider } from "@piki/ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { ForkRuntime } from "../../../src/core/fork-runtime.ts";

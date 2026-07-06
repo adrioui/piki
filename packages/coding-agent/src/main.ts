@@ -6,7 +6,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
+import { type ImageContent, modelsAreEqual } from "@piki/ai";
 import chalk from "chalk";
 import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
@@ -33,6 +33,7 @@ import { applyAgentModeToolPolicy } from "./core/modes.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
+import { runServe } from "./core/serve.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
@@ -476,10 +477,10 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	const offlineMode = effectiveArgs.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+	const offlineMode = effectiveArgs.includes("--offline") || isTruthyEnvFlag(process.env.PIKI_OFFLINE);
 	if (offlineMode) {
-		process.env.PI_OFFLINE = "1";
-		process.env.PI_SKIP_VERSION_CHECK = "1";
+		process.env.PIKI_OFFLINE = "1";
+		process.env.PIKI_SKIP_VERSION_CHECK = "1";
 	}
 
 	const cwd = process.cwd();
@@ -507,6 +508,11 @@ export async function main(args: string[], options?: MainOptions) {
 
 	if (await handleSessionsCommand(effectiveArgs)) {
 		process.exit(process.exitCode ?? 0);
+	}
+
+	if (effectiveArgs[0] === "serve") {
+		runServe(effectiveArgs.slice(1));
+		return;
 	}
 
 	const parsed = parseArgs(effectiveArgs);
@@ -798,9 +804,9 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
-	const startupBenchmark = isTruthyEnvFlag(process.env.PI_STARTUP_BENCHMARK);
+	const startupBenchmark = isTruthyEnvFlag(process.env.PIKI_STARTUP_BENCHMARK);
 	if (startupBenchmark && appMode !== "interactive") {
-		console.error(chalk.red("Error: PI_STARTUP_BENCHMARK only supports interactive mode"));
+		console.error(chalk.red("Error: PIKI_STARTUP_BENCHMARK only supports interactive mode"));
 		process.exit(1);
 	}
 
@@ -832,7 +838,7 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await interactiveMode.run();
 		if (parsed.atif) {
-			exportAtif(session.sessionManager, parsed.atif);
+			exportAtif(session.sessionManager, parsed.atif, undefined, parsed.atifSchema);
 		}
 	} else {
 		printTimings();
@@ -842,6 +848,7 @@ export async function main(args: string[], options?: MainOptions) {
 			initialMessage,
 			initialImages,
 			atifPath: parsed.atif,
+			atifSchema: parsed.atifSchema,
 		});
 		stopThemeWatcher();
 		restoreStdout();

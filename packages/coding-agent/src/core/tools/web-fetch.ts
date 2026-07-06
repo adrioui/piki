@@ -6,7 +6,7 @@
 import type { LookupAddress } from "node:dns";
 import { lookup } from "node:dns/promises";
 import { isIP, type LookupFunction } from "node:net";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "@piki/agent-core";
 import { type Static, Type } from "typebox";
 import { Agent, fetch as undiciFetch } from "undici";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";

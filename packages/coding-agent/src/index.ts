@@ -162,6 +162,32 @@ export {
 } from "./core/extensions/index.ts";
 // Footer data provider (git branch + extension statuses - data not otherwise available to extensions)
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
+export {
+	ALWAYS_EXCLUDED,
+	completeObserverRun,
+	createDefaultIgnore,
+	createObserverToolkit,
+	DEFAULT_IGNORE_PATTERNS,
+	DEFAULT_MEMORY_CAPACITY,
+	initialObserverForkState,
+	type MemoryEntry,
+	MemoryStorage,
+	type MemoryStorageShape,
+	makeMemoryStorageLayer,
+	OBSERVER_JUSTIFICATIONS,
+	type ObserverForkState,
+	type ObserverJustification,
+	type ObserverStateName,
+	type ObserverToolkitTool,
+	type ObserverTurnEvent,
+	type ObserverVerdict,
+	parseGitignore,
+	queueObserverTurn,
+	rebasePattern,
+	type WalkEntry,
+	type WalkOptions,
+	walk,
+} from "./core/index.ts";
 export { convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export type {
@@ -368,5 +394,6 @@ export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { convertToPng } from "./utils/image-convert.ts";
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
+export { type ImageForModel, type ReadImageFileOptions, readImageFileForModel } from "./utils/read-image-file.ts";
 // Shell utilities
 export { getShellConfig } from "./utils/shell.ts";

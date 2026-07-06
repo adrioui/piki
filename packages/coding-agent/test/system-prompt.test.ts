@@ -11,6 +11,8 @@ function makeSkill(name: string, description: string): Skill {
 		baseDir: `/skills/${name}`,
 		sourceInfo: createSyntheticSourceInfo(`/skills/${name}/SKILL.md`, { source: "test" }),
 		disableModelInvocation: false,
+		roles: [],
+		excludeRoles: [],
 	};
 }
 
@@ -59,14 +61,14 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("- write:");
 		});
 
-		test("instructs models to resolve pi docs and examples under absolute base paths", () => {
+		test("instructs models to resolve piki docs and examples under absolute base paths", () => {
 			const prompt = buildSystemPrompt({
 				contextFiles: [],
 				skills: [],
 				cwd: process.cwd(),
 			});
 
-			expect(prompt).toContain("Pi documentation");
+			expect(prompt).toContain("Piki documentation");
 			expect(prompt).toMatch(/README: .+ \| docs: .+ \| examples: .+/);
 		});
 	});
@@ -139,10 +141,10 @@ describe("buildSystemPrompt", () => {
 			});
 
 			// Default identity and docs section are present
-			expect(prompt).toContain("You are an expert coding assistant operating inside pi");
-			expect(prompt).toContain("Pi documentation");
+			expect(prompt).toContain("You are an expert coding assistant operating inside piki");
+			expect(prompt).toContain("Piki documentation");
 			// Open-source explicit identity is NOT present
-			expect(prompt).not.toContain("You are pi, an interactive coding agent.");
+			expect(prompt).not.toContain("You are piki, an interactive coding agent.");
 			expect(prompt).not.toContain("Tool usage:");
 		});
 
@@ -153,7 +155,7 @@ describe("buildSystemPrompt", () => {
 				skills: [],
 				cwd: process.cwd(),
 			});
-			expect(prompt).toContain("You are an expert coding assistant operating inside pi");
+			expect(prompt).toContain("You are an expert coding assistant operating inside piki");
 			expect(prompt).not.toContain("Tool usage:");
 		});
 
@@ -172,8 +174,8 @@ describe("buildSystemPrompt", () => {
 			});
 
 			// Identity
-			expect(prompt).toContain("You are pi, an interactive coding agent.");
-			expect(prompt).toContain("pi coding harness");
+			expect(prompt).toContain("You are piki, an interactive coding agent.");
+			expect(prompt).toContain("piki coding harness");
 			// Major explicit reliability sections
 			expect(prompt).toContain("Agency:");
 			expect(prompt).toContain("Prefer correctness over speed for code changes");
@@ -189,10 +191,10 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("Git and workspace safety:");
 			expect(prompt).toContain("Validation:");
 			expect(prompt).toContain("Communication:");
-			// Pi docs guidance is still present (condensed)
-			expect(prompt).toContain("Pi documentation");
+			// Piki docs guidance is still present (condensed)
+			expect(prompt).toContain("Piki documentation");
 			// Default verbose identity is gone
-			expect(prompt).not.toContain("You are an expert coding assistant operating inside pi");
+			expect(prompt).not.toContain("You are an expert coding assistant operating inside piki");
 		});
 
 		test("open-source-explicit prompt includes economics section", () => {
@@ -224,7 +226,7 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).not.toContain("Economics:");
 		});
 
-		test("open-source-explicit prompt includes condensed pi docs guidance with README/docs/examples paths", () => {
+		test("open-source-explicit prompt includes condensed piki docs guidance with README/docs/examples paths", () => {
 			const prompt = buildSystemPrompt({
 				promptVariant: "open-source-explicit",
 				contextFiles: [],
@@ -234,7 +236,7 @@ describe("buildSystemPrompt", () => {
 
 			// The condensed docs block lists README/docs/examples pointer and the
 			// follow-cross-references rule.
-			expect(prompt).toContain("Pi documentation");
+			expect(prompt).toContain("Piki documentation");
 			expect(prompt).toMatch(/README: .+ \| docs: .+ \| examples: .+/);
 			expect(prompt).toContain("follow .md cross-references before implementing");
 		});

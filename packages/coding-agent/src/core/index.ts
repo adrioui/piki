@@ -3,6 +3,13 @@
  */
 
 export {
+	DEFAULT_MEMORY_CAPACITY,
+	type MemoryEntry,
+	MemoryStorage,
+	type MemoryStorageShape,
+	makeMemoryStorageLayer,
+} from "../effect/memory-storage.ts";
+export {
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,
@@ -27,6 +34,19 @@ export {
 } from "./agent-session-services.ts";
 export { type BashExecutorOptions, type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 export type { CompactionResult } from "./compaction/index.ts";
+// G19: ConfigStorage + context-limit policy
+export {
+	ConfigResolutionError,
+	ConfigStorage,
+	type ConfigStorageShape,
+	makeConfigStorageLayer,
+	type ResolvedModelConfig,
+} from "./config-storage.ts";
+export {
+	compactionTriggerThreshold,
+	computeContextLimits,
+	DEFAULT_MAX_OUTPUT_TOKENS,
+} from "./context-limit-policy.ts";
 export { createEventBus, type EventBus, type EventBusController } from "./event-bus.ts";
 export { areExperimentalFeaturesEnabled } from "./experimental.ts";
 // Extensions system
@@ -75,4 +95,29 @@ export {
 	type TurnStartEvent,
 	type WorkingIndicatorOptions,
 } from "./extensions/index.ts";
+export {
+	completeObserverRun,
+	initialObserverForkState,
+	type ObserverForkState,
+	type ObserverStateName,
+	type ObserverTurnEvent,
+	queueObserverTurn,
+} from "./observer/fsm.ts";
+export {
+	createObserverToolkit,
+	OBSERVER_JUSTIFICATIONS,
+	type ObserverJustification,
+	type ObserverToolkitTool,
+	type ObserverVerdict,
+} from "./observer/toolkit.ts";
 export { createSyntheticSourceInfo } from "./source-info.ts";
+export {
+	ALWAYS_EXCLUDED,
+	createDefaultIgnore,
+	DEFAULT_IGNORE_PATTERNS,
+	parseGitignore,
+	rebasePattern,
+	type WalkEntry,
+	type WalkOptions,
+	walk,
+} from "./util/gitignore-walker.ts";

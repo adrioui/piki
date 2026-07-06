@@ -10,12 +10,20 @@
  * Uses concurrencyKey per fork to prevent races.
  */
 
-import type { Model } from "@earendil-works/pi-ai";
-import type { EventEnvelope, ForkedProjectionStore, RoleDefinition } from "@earendil-works/pi-event-core";
+import type { StreamFn } from "@piki/agent-core";
+import type { Model } from "@piki/ai";
+import {
+	type EventEnvelope,
+	type ForkedProjectionStore,
+	ROLE_DEFINITIONS,
+	type RoleDefinition,
+} from "@piki/event-core";
+import { Effect } from "effect";
 import { DetachedProcessRegistry } from "./detached-process-registry.ts";
 import type { PermissionRule } from "./permissions/permission-gate.ts";
-import { buildWorkerContext } from "./worker-context-builder.ts";
+import { buildRoleAwareWorkerContext, buildWorkerContext } from "./worker-context-builder.ts";
 import { WorkerEffectRuntime } from "./worker-effect-runtime.ts";
+import { WorkerLifecycleRegistry } from "./worker-lifecycle-registry.ts";
 import { WorkerSession, type WorkerTool } from "./worker-session.ts";
 import { filterToolsForRole } from "./worker-tools.ts";
 
@@ -23,10 +31,24 @@ type RuntimeEvent = EventEnvelope<string, Record<string, unknown>>;
 
 export interface WorkerExecutorOptions {
 	resolveModel: (role: string) => Model<string> | undefined;
+	/**
+	 * Stream function used by spawned workers to call their model. Mirrors the
+	 * leader's Agent.streamFn (built in sdk.ts) so workers resolve API keys,
+	 * headers, env, and retry settings the same way. Without this, workers fall
+	 * back to the bare streamSimple, which has no API key and throws
+	 * `No API key for provider: <provider>` for any key-based provider.
+	 */
+	streamFn?: StreamFn;
 	getSystemPrompt: (role: string) => string;
 	getAllTools: () => WorkerTool[];
+	/** Optional: returns all loaded skills for role-based filtering. */
+	getAllSkills?: () => import("./skills.ts").Skill[];
 	getProjectContext: () => string;
+	cwd?: string;
+	scratchpadPath?: string;
 	getTranscript: () => string;
+	getScratchpad?: () => string;
+	getProcessContext?: () => string;
 	publishEvent: (type: string, payload: Record<string, unknown>) => Promise<void>;
 	userRules?: PermissionRule[];
 	forkedProjectionStore?: ForkedProjectionStore<RuntimeEvent>;
@@ -61,6 +83,7 @@ export class WorkerExecutor {
 	private readonly finalizedWorkers = new Set<string>();
 	private readonly detachedRegistry = new DetachedProcessRegistry();
 	private readonly runtime = new WorkerEffectRuntime();
+	private readonly lifecycle = new WorkerLifecycleRegistry();
 	private readonly options: WorkerExecutorOptions;
 	private currentForkId: string | undefined;
 
@@ -79,6 +102,10 @@ export class WorkerExecutor {
 	/** Get the DetachedProcessRegistry for external use. */
 	getDetachedProcessRegistry(): DetachedProcessRegistry {
 		return this.detachedRegistry;
+	}
+
+	getWorkerLifecycleRegistry(): WorkerLifecycleRegistry {
+		return this.lifecycle;
 	}
 
 	/** Set the current fork context for detached process registration. */
@@ -126,6 +153,7 @@ export class WorkerExecutor {
 
 		const { forkId, agentId, role } = payload;
 		if (payload.mode !== "spawn" || role === "leader") return;
+		await Effect.runPromise(this.lifecycle.apply({ type: "created", forkId, agentId, role }));
 
 		const model = this.options.resolveModel(role);
 		if (!model) {
@@ -141,12 +169,24 @@ export class WorkerExecutor {
 			systemPrompt = this.options.getSystemPrompt(role);
 			const allTools = this.options.getAllTools();
 			filteredTools = filterToolsForRole(role, allTools);
+
+			// Build role-aware context using the role's context lens
+			const roleDef = ROLE_DEFINITIONS[role];
 			const projectContext = this.options.getProjectContext();
-			context = buildWorkerContext({
-				sessionStart: "",
-				projectContext,
-				transcript: this.options.getTranscript(),
-			});
+			context = roleDef
+				? buildRoleAwareWorkerContext({
+						roleDef,
+						sessionStart: "",
+						projectContext,
+						transcript: this.options.getTranscript(),
+						scratchpad: this.options.getScratchpad?.(),
+						processContext: this.options.getProcessContext?.(),
+					})
+				: buildWorkerContext({
+						sessionStart: "",
+						projectContext,
+						transcript: this.options.getTranscript(),
+					});
 		} catch (err) {
 			await this.publishTerminalSpawnFailure(forkId, agentId, role, "spawn_setup_error");
 			this.options.onWorkerError({
@@ -167,6 +207,9 @@ export class WorkerExecutor {
 			initialMessage: payload.message ?? payload.context ?? "",
 			tools: filteredTools,
 			contextLimit: model.contextWindow ?? 128000,
+			cwd: this.options.cwd,
+			scratchpadPath: this.options.scratchpadPath,
+			streamFn: this.options.streamFn,
 			userRules: this.options.userRules ?? [],
 			publishEvent: (type, eventPayload) =>
 				this.options.publishEvent(type, {
@@ -209,6 +252,7 @@ export class WorkerExecutor {
 				role,
 			});
 		});
+		await Effect.runPromise(this.lifecycle.apply({ type: "started", agentId }));
 	}
 
 	private async onWorkerMessaged(event: RuntimeEvent): Promise<void> {
@@ -216,6 +260,7 @@ export class WorkerExecutor {
 		const session = this.workers.get(payload.workerId);
 		if (session) {
 			session.deliverMessage(payload.message);
+			await Effect.runPromise(this.lifecycle.apply({ type: "messaged", agentId: payload.workerId }));
 			return;
 		}
 		await this.runtime.offerMessage(payload.workerId, payload.message);
@@ -228,6 +273,14 @@ export class WorkerExecutor {
 			return;
 		}
 		this.intentionallyKilled.add(payload.agentId);
+		await Effect.runPromise(
+			this.lifecycle.apply({
+				type: "finished",
+				agentId: payload.agentId,
+				status: "killed",
+				reason: "killed",
+			}),
+		);
 		await this.runtime.killSession(payload.agentId, session);
 		this.detachedRegistry.killAll(payload.forkId);
 	}
@@ -244,6 +297,7 @@ export class WorkerExecutor {
 		if (this.finalizedWorkers.has(agentId)) return;
 		this.finalizedWorkers.add(agentId);
 		this.intentionallyKilled.delete(agentId);
+		await Effect.runPromise(this.lifecycle.apply({ type: "finished", agentId, status: reason, reason }));
 		await this.options.publishEvent("fork_cleaned", {
 			forkId,
 			agentId,
@@ -261,6 +315,7 @@ export class WorkerExecutor {
 			if (forkSet.size === 0) this.forkWorkers.delete(forkId);
 		}
 		this.options.forkedProjectionStore?.removeFork(forkId);
+		void Effect.runPromise(this.lifecycle.apply({ type: "cleaned", agentId, reason: "cleanup" }));
 	}
 
 	isWorkerRunning(agentId: string): boolean {

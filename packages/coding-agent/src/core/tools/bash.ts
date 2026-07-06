@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import type { AgentTool } from "@piki/agent-core";
+import { Container, Text, truncateToWidth } from "@piki/tui";
 import { spawn } from "child_process";
 import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
@@ -15,6 +15,8 @@ import {
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
 } from "../../utils/shell.ts";
+import { type AutoDetachResult, spawnDetached } from "../auto-detach.ts";
+import { classifyCommand } from "../command-classifier.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
@@ -31,6 +33,8 @@ export type BashToolInput = Static<typeof bashSchema>;
 export interface BashToolDetails {
 	truncation?: TruncationResult;
 	fullOutputPath?: string;
+	/** Set when the command was auto-detached (long-running, no explicit timeout). */
+	autoDetach?: AutoDetachResult;
 }
 
 /**
@@ -38,6 +42,13 @@ export interface BashToolDetails {
  * Override these to delegate command execution to remote systems (for example SSH).
  */
 export interface BashOperations {
+	/**
+	 * Whether this operations instance represents the local shell backend.
+	 * When true, auto-detach uses local spawnDetached() directly.
+	 * When false/undefined, auto-detach routes through exec() to support
+	 * remote backends (SSH, Docker, etc.).
+	 */
+	readonly isLocal?: boolean;
 	/**
 	 * Execute a command and stream output.
 	 * @param command The command to execute
@@ -65,6 +76,7 @@ export interface BashOperations {
  */
 export function createLocalBashOperations(options?: { shellPath?: string }): BashOperations {
 	return {
+		isLocal: true,
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
 			const shellConfig = getShellConfig(options?.shellPath);
 			try {
@@ -193,6 +205,14 @@ function formatBashCall(args: { command?: string; timeout?: number } | undefined
 	return theme.fg("toolTitle", theme.bold(`$ ${commandDisplay}`)) + timeoutSuffix;
 }
 
+function formatAutoDetachBanner(detach: AutoDetachResult): string {
+	return [
+		theme.fg("warning", `[Auto-detached: ${detach.reason}]`),
+		theme.fg("muted", `PID: ${detach.pid}`),
+		theme.fg("muted", `Log: ${detach.logPath}`),
+	].join("\n");
+}
+
 function rebuildBashResultRenderComponent(
 	component: BashResultRenderComponent,
 	result: {
@@ -249,6 +269,11 @@ function rebuildBashResultRenderComponent(
 				},
 			});
 		}
+	}
+
+	const autoDetach = result.details?.autoDetach;
+	if (autoDetach) {
+		component.addChild(new Text(`\n${formatAutoDetachBanner(autoDetach)}`, 0, 0));
 	}
 
 	if (truncation?.truncated || fullOutputPath) {
@@ -308,6 +333,76 @@ export function createBashToolDefinition(
 			_ctx?,
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
+
+			// Auto-detach long-running commands when no explicit timeout is set.
+			if (timeout === undefined || timeout <= 0) {
+				const classification = classifyCommand(command);
+				if (classification.longRunning && classification.reason) {
+					// When a custom (non-local) backend is provided, route through ops.exec
+					// instead of spawning locally. This ensures remote backends (SSH, Docker)
+					// handle the command correctly.
+					if (ops.isLocal === false) {
+						const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+						const output = new OutputAccumulator({ tempFilePrefix: "pi-detached" });
+						try {
+							await ops.exec(spawnContext.command, spawnContext.cwd, {
+								onData: (data) => output.append(data),
+								env: spawnContext.env,
+							});
+						} finally {
+							output.finish();
+							await output.closeTempFile();
+						}
+						const snapshot = output.snapshot({ persistIfTruncated: true });
+						const logPath = snapshot.fullOutputPath ?? "";
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: [
+										`Command executed via custom backend: ${classification.reason}`,
+										`Backend: ${ops.constructor?.name ?? "custom"}`,
+										logPath ? `Log: ${logPath}` : "",
+										"",
+										"Output has been captured. The command completed via the custom backend.",
+									]
+										.filter(Boolean)
+										.join("\n"),
+								},
+							],
+							details: {
+								autoDetach: {
+									detached: true as const,
+									pid: 0,
+									logPath,
+									reason: classification.reason,
+									startedAt: Date.now(),
+								},
+							},
+						};
+					}
+
+					const detachResult = spawnDetached(resolvedCommand, cwd, classification.reason, options?.shellPath);
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: [
+									`Command auto-detached: ${classification.reason}`,
+									`PID: ${detachResult.pid}`,
+									`Log: ${detachResult.logPath}`,
+									"",
+									"Output is being written to the log file. The command will continue running in the background.",
+								].join("\n"),
+							},
+						],
+						details: {
+							autoDetach: detachResult,
+						},
+					};
+				}
+			}
+
 			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
 			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
 			let acceptingOutput = true;
