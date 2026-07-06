@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Added compatibility for Pi package manifests and `@earendil-works/pi-*` imports so packages such as `amp-themes` and `pi-btw` load under Piki.
 - Replaced unsafe shell-string git calls and several `any` type bypasses in coding-agent tool and context-firewall code.
 - Stopped treating normal git operations such as `commit`, `push`, `merge`, and `rebase` as forbidden shell commands while preserving blocks for destructive variants.
 

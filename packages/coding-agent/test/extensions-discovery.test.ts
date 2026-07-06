@@ -474,6 +474,32 @@ describe("extensions discovery", () => {
 		expect(result.extensions[0].tools.has("discovered")).toBe(false);
 	});
 
+	it("loads legacy pi package manifests and Earendil package imports", async () => {
+		const packageDir = path.join(tempDir, "legacy-package");
+		const packageExtensionsDir = path.join(packageDir, "extensions");
+		fs.mkdirSync(packageExtensionsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ name: "legacy-package", pi: { extensions: ["./extensions/index.ts"] } }),
+		);
+		fs.writeFileSync(
+			path.join(packageExtensionsDir, "index.ts"),
+			`
+				import { Text } from "@earendil-works/pi-tui";
+
+				export default function(piki) {
+					piki.registerMessageRenderer("legacy-message", () => new Text("ok", 0, 0));
+				}
+			`,
+		);
+
+		const result = await discoverAndLoadExtensions([packageDir], tempDir, tempDir);
+
+		expect(result.errors).toHaveLength(0);
+		expect(result.extensions).toHaveLength(1);
+		expect(result.extensions[0].messageRenderers.has("legacy-message")).toBe(true);
+	});
+
 	it("loadExtensions with no paths loads nothing", async () => {
 		// Create discoverable extensions (would be found by discoverAndLoadExtensions)
 		fs.writeFileSync(path.join(extensionsDir, "discovered.ts"), extensionCode);

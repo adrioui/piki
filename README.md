@@ -55,6 +55,17 @@ Run from source during development:
 - **Extensible CLI**: examples for custom tools, providers, renderers, permissions, prompts, compaction, and UI extensions.
 - **Typed foundation**: TypeScript packages with shared tests, generated shrinkwrap validation, and import compatibility checks.
 
+## Extension packages
+
+Piki can load Pi/Piki package manifests from npm, git, or local paths. Existing Pi TUI packages that import `@earendil-works/pi-*` APIs are supported through compatibility aliases.
+
+```sh
+piki install npm:amp-themes
+piki install npm:pi-btw
+```
+
+Then reload the interactive session with `/reload`. For Amp themes, set `"theme": "amp-dark"` or `"theme": "amp-light"` in settings.
+
 ## Development
 
 ```sh

@@ -66,6 +66,13 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@mariozechner/pi-ai/compat": _bundledPiAiCompat,
 	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
+	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
+	"@earendil-works/pi-tui": _bundledPiTui,
+	"@earendil-works/pi-ai": _bundledPiAiCompat,
+	"@earendil-works/pi-ai/base": _bundledPiAiCompatAsBase,
+	"@earendil-works/pi-ai/compat": _bundledPiAiCompat,
+	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
+	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -119,6 +126,13 @@ function getAliases(): Record<string, string> {
 		"@mariozechner/pi-ai/base": piAiCompatEntry,
 		"@mariozechner/pi-ai/compat": piAiCompatEntry,
 		"@mariozechner/pi-ai/oauth": piAiOauthEntry,
+		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
+		"@earendil-works/pi-agent-core": piAgentCoreEntry,
+		"@earendil-works/pi-tui": piTuiEntry,
+		"@earendil-works/pi-ai": piAiCompatEntry,
+		"@earendil-works/pi-ai/base": piAiCompatEntry,
+		"@earendil-works/pi-ai/compat": piAiCompatEntry,
+		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		typebox: typeboxEntry,
 		"typebox/compile": typeboxCompileEntry,
 		"typebox/value": typeboxValueEntry,
@@ -540,10 +554,7 @@ function readPiManifest(packageJsonPath: string): PiManifest | null {
 	try {
 		const content = fs.readFileSync(packageJsonPath, "utf-8");
 		const pkg = JSON.parse(content);
-		if (pkg.piki && typeof pkg.piki === "object") {
-			return pkg.piki as PiManifest;
-		}
-		return null;
+		return (pkg.piki ?? pkg.pi ?? null) as PiManifest | null;
 	} catch {
 		return null;
 	}
