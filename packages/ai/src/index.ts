@@ -3,12 +3,13 @@ export { Type } from "typebox";
 
 // Core only, side-effect free: no generated catalogs, no provider factories,
 // no api-registry, no OAuth implementations, no compat. Provider factories
-// live under "@earendil-works/pi-ai/providers/*", API implementations under
-// "@earendil-works/pi-ai/api/*", the old global API under
-// "@earendil-works/pi-ai/compat".
+// live under "@piki/ai/providers/*", API implementations under
+// "@piki/ai/api/*", the old global API under
+// "@piki/ai/compat".
 export type { AnthropicEffort, AnthropicOptions, AnthropicThinkingDisplay } from "./api/anthropic-messages.ts";
 export type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 export type { BedrockOptions, BedrockThinkingDisplay } from "./api/bedrock-converse-stream.ts";
+export type { CommandCodeOptions } from "./api/commandcode.ts";
 export type { GoogleOptions } from "./api/google-generative-ai.ts";
 export type { GoogleThinkingLevel } from "./api/google-shared.ts";
 export type { GoogleVertexOptions } from "./api/google-vertex.ts";
@@ -45,5 +46,7 @@ export type {
 	OAuthSelectPrompt,
 } from "./utils/oauth/types.ts";
 export * from "./utils/overflow.ts";
+export * from "./utils/retry-backoff.ts";
+export * from "./utils/token-estimate.ts";
 export * from "./utils/typebox-helpers.ts";
 export * from "./utils/validation.ts";

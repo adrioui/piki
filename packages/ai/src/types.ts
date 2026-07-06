@@ -1,6 +1,7 @@
 import type { AnthropicOptions } from "./api/anthropic-messages.ts";
 import type { AzureOpenAIResponsesOptions } from "./api/azure-openai-responses.ts";
 import type { BedrockOptions } from "./api/bedrock-converse-stream.ts";
+import type { CommandCodeOptions } from "./api/commandcode.ts";
 import type { GoogleOptions } from "./api/google-generative-ai.ts";
 import type { GoogleVertexOptions } from "./api/google-vertex.ts";
 import type { MistralOptions } from "./api/mistral-conversations.ts";
@@ -13,6 +14,7 @@ import type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 export type { AssistantMessageEventStream } from "./utils/event-stream.ts";
 
 export type KnownApi =
+	| "commandcode"
 	| "openai-completions"
 	| "mistral-conversations"
 	| "openai-responses"
@@ -30,6 +32,8 @@ export type KnownImagesApi = "openrouter-images";
 export type ImagesApi = KnownImagesApi | (string & {});
 
 export type KnownProvider =
+	| "clinepass"
+	| "commandcode"
 	| "amazon-bedrock"
 	| "ant-ling"
 	| "anthropic"
@@ -194,6 +198,7 @@ export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
  * this is tree-shake safe.
  */
 export interface ApiOptionsMap {
+	commandcode: CommandCodeOptions;
 	"anthropic-messages": AnthropicOptions;
 	"openai-completions": OpenAICompletionsOptions;
 	"openai-responses": OpenAIResponsesOptions;

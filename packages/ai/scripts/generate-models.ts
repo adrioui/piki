@@ -9,6 +9,8 @@ import {
 	CLOUDFLARE_AI_GATEWAY_OPENAI_BASE_URL,
 	CLOUDFLARE_WORKERS_AI_BASE_URL,
 } from "../src/api/cloudflare.ts";
+import { CLINEPASS_STATIC_MODELS } from "../src/providers/clinepass-catalog.ts";
+import { COMMANDCODE_STATIC_MODELS } from "../src/providers/commandcode-catalog.ts";
 import type { AnthropicMessagesCompat, Api, KnownProvider, Model, OpenAICompletionsCompat } from "../src/types.ts";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1601,6 +1603,8 @@ async function generateModels() {
 		(model) =>
 			!((model.provider === "opencode" || model.provider === "opencode-go") && model.id === "gpt-5.3-codex-spark"),
 	);
+
+	allModels.push(...CLINEPASS_STATIC_MODELS, ...COMMANDCODE_STATIC_MODELS);
 
 	// Fix incorrect cache pricing for Claude Opus 4.5 from models.dev
 	// models.dev has 3x the correct pricing (1.5/18.75 instead of 0.5/6.25)

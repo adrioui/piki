@@ -7,8 +7,10 @@ import { antLingProvider } from "./ant-ling.ts";
 import { anthropicProvider } from "./anthropic.ts";
 import { azureOpenAIResponsesProvider } from "./azure-openai-responses.ts";
 import { cerebrasProvider } from "./cerebras.ts";
+import { clinePassProvider } from "./clinepass.ts";
 import { cloudflareAIGatewayProvider } from "./cloudflare-ai-gateway.ts";
 import { cloudflareWorkersAIProvider } from "./cloudflare-workers-ai.ts";
+import { commandCodeProvider } from "./commandcode.ts";
 import { deepseekProvider } from "./deepseek.ts";
 import { fireworksProvider } from "./fireworks.ts";
 import { githubCopilotProvider } from "./github-copilot.ts";
@@ -76,6 +78,8 @@ export function builtinProviders(): Provider[] {
 		cerebrasProvider(),
 		cloudflareAIGatewayProvider(),
 		cloudflareWorkersAIProvider(),
+		clinePassProvider(),
+		commandCodeProvider(),
 		deepseekProvider(),
 		fireworksProvider(),
 		githubCopilotProvider(),
