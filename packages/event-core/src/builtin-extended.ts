@@ -574,7 +574,11 @@ export function createErrorProjection<TEvent extends EventEnvelope = EventEnvelo
 export interface UsageState {
 	inputTokens: number;
 	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	totalTokens: number;
 	cost: number;
+	missingReason: string | null;
 }
 
 export function createUsageProjection<TEvent extends EventEnvelope = EventEnvelope>(): ProjectionDefinition<
@@ -585,14 +589,31 @@ export function createUsageProjection<TEvent extends EventEnvelope = EventEnvelo
 		name: "Usage",
 		reads: [],
 		writes: [],
-		initialState: (): UsageState => ({ inputTokens: 0, outputTokens: 0, cost: 0 }),
+		initialState: (): UsageState => ({
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			totalTokens: 0,
+			cost: 0,
+			missingReason: null,
+		}),
 		reduce: (state, event) => {
 			if (event.type !== "usage_recorded") return state;
 			const p = payload(event);
+			const inputTokens = num(p.inputTokens);
+			const outputTokens = num(p.outputTokens);
+			const cacheReadTokens = num(p.cacheReadTokens);
+			const cacheWriteTokens = num(p.cacheWriteTokens);
+			const totalTokens = num(p.totalTokens, inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens);
 			return {
-				inputTokens: state.inputTokens + num(p.inputTokens),
-				outputTokens: state.outputTokens + num(p.outputTokens),
+				inputTokens: state.inputTokens + inputTokens,
+				outputTokens: state.outputTokens + outputTokens,
+				cacheReadTokens: state.cacheReadTokens + cacheReadTokens,
+				cacheWriteTokens: state.cacheWriteTokens + cacheWriteTokens,
+				totalTokens: state.totalTokens + totalTokens,
 				cost: state.cost + num(p.cost),
+				missingReason: typeof p.missingReason === "string" ? p.missingReason : null,
 			};
 		},
 	};

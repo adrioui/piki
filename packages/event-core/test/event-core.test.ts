@@ -12,6 +12,7 @@ import {
 	createGoalProjection,
 	createSignal,
 	createTaskGraphProjection,
+	createUsageProjection,
 	DefaultEventSink,
 	InMemoryEventStore,
 	ProjectionStore,
@@ -138,6 +139,24 @@ describe("event-core", () => {
 		await sink.waitForIdle();
 
 		expect(store.list().map((current) => current.sequence)).toEqual([1, 2, 3]);
+		sink.dispose();
+	});
+
+	it("applies ephemeral events without persisting them", async () => {
+		const store = new InMemoryEventStore<TestEvent>();
+		const sink = new DefaultEventSink<TestEvent>(store);
+		sink.registerProjection({
+			name: "sum",
+			initialState: 0,
+			reduce: (state: number, current) => (current.type === "counted" ? state + current.payload.value : state),
+		});
+
+		await sink.publish({ ...event(1, "counted", 4), ephemeral: true });
+		await sink.waitForIdle();
+
+		expect(store.list()).toEqual([]);
+		expect(sink.projections().get<number>("sum")).toBe(4);
+		expect(sink.getSequence()).toBe(1);
 		sink.dispose();
 	});
 
@@ -368,6 +387,46 @@ describe("event-core", () => {
 		expect(below).toEqual([]);
 		expect(crossing.map((signal) => signal.type)).toEqual(["ContextUsage/softCapExceeded"]);
 		expect(after).toEqual([]);
+	});
+
+	it("accumulates usage cache tokens and missing usage reasons", () => {
+		type UsageEvent = EventEnvelope<"usage_recorded", Record<string, unknown>>;
+		const projections = new ProjectionStore<UsageEvent>();
+		projections.register(createUsageProjection<UsageEvent>());
+
+		projections.apply({
+			id: "1",
+			stream: "s",
+			sequence: 1,
+			type: "usage_recorded",
+			timestamp: "t",
+			payload: {
+				inputTokens: 3,
+				outputTokens: 5,
+				cacheReadTokens: 7,
+				cacheWriteTokens: 11,
+				totalTokens: 26,
+				cost: 0.5,
+			},
+		});
+		projections.apply({
+			id: "2",
+			stream: "s",
+			sequence: 2,
+			type: "usage_recorded",
+			timestamp: "t",
+			payload: { inputTokens: 1, outputTokens: 2, missingReason: "usage_chunk_never_arrived" },
+		});
+
+		expect(projections.get("Usage")).toEqual({
+			inputTokens: 4,
+			outputTokens: 7,
+			cacheReadTokens: 7,
+			cacheWriteTokens: 11,
+			totalTokens: 29,
+			cost: 0.5,
+			missingReason: "usage_chunk_never_arrived",
+		});
 	});
 
 	it("deduplicates resolved user messages in the conversation projection", async () => {

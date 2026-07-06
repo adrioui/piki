@@ -1,7 +1,7 @@
 {
-	"name": "@earendil-works/pi-event-core",
+	"name": "@piki/event-core",
 	"version": "0.80.2",
-	"description": "Event store, projections, and role runtime for Pi",
+	"description": "Event store, projections, and role runtime for Piki",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -9,6 +9,14 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./runtime": {
+			"types": "./dist/runtime/index.d.ts",
+			"import": "./dist/runtime/index.js"
+		},
+		"./types": {
+			"types": "./dist/types.d.ts",
+			"import": "./dist/types.js"
 		},
 		"./package.json": "./package.json"
 	},
@@ -22,6 +30,9 @@
 	"license": "MIT",
 	"engines": {
 		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"effect": "4.0.0-beta.93"
 	},
 	"devDependencies": {
 		"@types/node": "24.12.4",

@@ -41,4 +41,48 @@ export class StateMachine<TState extends string, TEvent extends string, TContext
 	getContext(): TContext {
 		return this.context;
 	}
+
+	// --- G17 enrichment: query/inspection methods. All pure, synchronous, non-mutating. ---
+
+	/** Return current state without mutating. */
+	hold(): TState {
+		return this.state;
+	}
+
+	/** If predicate(currentState), project via handler; else undefined. No mutation. */
+	match<T>(predicate: (state: TState) => boolean, handler: (state: TState) => T): T | undefined {
+		return predicate(this.state) ? handler(this.state) : undefined;
+	}
+
+	/** True iff current state === `state`. */
+	is(state: TState): boolean {
+		return this.state === state;
+	}
+
+	/** True iff a transition exists for the current state + event (send would move). */
+	canTransition(event: TEvent): boolean {
+		return this.transitions.some((candidate) => candidate.from === this.state && candidate.event === event);
+	}
+
+	/** True iff `state` (default: current) has no outgoing transitions (is terminal). */
+	isTerminal(state: TState = this.state): boolean {
+		return !this.transitions.some((candidate) => candidate.from === state);
+	}
+
+	/** All distinct terminal states (states with no outgoing transitions). Deduped. */
+	getTerminalStates(): TState[] {
+		const allStates = new Set<TState>();
+		for (const t of this.transitions) {
+			allStates.add(t.from);
+			allStates.add(t.to);
+		}
+		const outgoing = new Set<TState>(this.transitions.map((t) => t.from));
+		const terminal: TState[] = [];
+		for (const s of allStates) {
+			if (!outgoing.has(s)) {
+				terminal.push(s);
+			}
+		}
+		return terminal;
+	}
 }

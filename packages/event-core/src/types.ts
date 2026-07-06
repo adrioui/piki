@@ -6,6 +6,8 @@ export interface EventEnvelope<TType extends string = string, TPayload = unknown
 	timestamp: string;
 	sessionId?: string;
 	source?: string;
+	/** Coordination-only events update projections and roles but are not persisted to the event store. */
+	ephemeral?: boolean;
 	payload: TPayload;
 }
 
@@ -138,7 +140,7 @@ export interface RoleDefinition<TEvent extends EventEnvelope = EventEnvelope> {
  * - Phase 2 (asynchronous): Workers/Roles (side effects, LLM calls)
  */
 export interface EventSink<TEvent extends EventEnvelope = EventEnvelope> {
-	/** Publish an event: persist → apply projections → dispatch signals → run roles. */
+	/** Publish an event: apply projections → persist durable events → dispatch signals → run roles. */
 	publish(event: TEvent): Promise<void>;
 	/** Replay events from the store to rebuild projection state (hydration on startup). */
 	replay(events: readonly TEvent[]): void;

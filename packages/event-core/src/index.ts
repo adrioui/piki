@@ -23,8 +23,12 @@ export * from "./fork.ts";
 export { ForkedProjectionStore } from "./forked-projection.ts";
 export { StateMachine, type StateTransition } from "./fsm.ts";
 export { ProjectionStore } from "./projection.ts";
+export * from "./projections/goal.ts";
+export * from "./projections/harness-state.ts";
+export * from "./projections/user-message-resolution.ts";
 export { InMemorySignalBus, RoleHost, type RoleHostOptions } from "./role.ts";
 export * from "./roles.ts";
+export * from "./runtime/index.ts";
 export { DefaultEventSink, type DefaultEventSinkOptions } from "./sink.ts";
 export { InMemoryEventStore, JsonlEventStore } from "./store.ts";
 export type {
