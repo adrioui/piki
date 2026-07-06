@@ -11,7 +11,7 @@ import type {
 	TextContent,
 	Tool,
 	ToolResultMessage,
-} from "@earendil-works/pi-ai";
+} from "@piki/ai";
 import type { Static, TSchema } from "typebox";
 
 /**
@@ -285,12 +285,25 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * The hook receives the agent abort signal and is responsible for honoring it.
 	 */
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
+
+	/**
+	 * Optional epoch staleness check.
+	 *
+	 * Called at key points during the loop (after streaming, after tool execution,
+	 * before continuing turns) to determine whether the current async flow is still
+	 * valid. When this returns false, the loop drops user-visible events (stale
+	 * results) but still emits cleanup events so finalizers can run.
+	 *
+	 * Return undefined or true to proceed normally. Return false to signal that
+	 * the turn was interrupted and results should be dropped.
+	 */
+	checkEpoch?: () => boolean | undefined;
 }
 
 /**
  * Thinking/reasoning level for models that support it.
  * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
- * from @earendil-works/pi-ai to detect support for a concrete model.
+ * from @piki/ai to detect support for a concrete model.
  */
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 

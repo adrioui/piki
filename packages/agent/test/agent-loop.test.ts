@@ -5,7 +5,7 @@ import {
 	type Message,
 	type Model,
 	type UserMessage,
-} from "@earendil-works/pi-ai";
+} from "@piki/ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { agentLoop, agentLoopContinue } from "../src/agent-loop.ts";
@@ -1493,5 +1493,142 @@ describe("agentLoopContinue with AgentMessage", () => {
 		const messages = await stream.result();
 		expect(messages.length).toBe(1);
 		expect(messages[0].role).toBe("assistant");
+	});
+});
+
+describe("agentLoop epoch checking", () => {
+	it("drops stale results when checkEpoch returns false after streaming", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		let epochStale = false;
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			checkEpoch: () => !epochStale,
+		};
+
+		// Use a stream that signals done after a delay, giving time to set epochStale
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			const message = createAssistantMessage([{ type: "text", text: "Hello!" }], "stop");
+			// Push done event after a macrotask to allow epochStale to be set
+			setTimeout(() => {
+				stream.push({ type: "done", reason: "stop", message });
+			}, 10);
+			return stream;
+		};
+
+		// Set epoch stale while streaming is in progress
+		setTimeout(() => {
+			epochStale = true;
+		}, 5);
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// Should have agent_start but agent_end should drop stale turn_end
+		const agentStart = events.find((e) => e.type === "agent_start");
+		expect(agentStart).toBeDefined();
+
+		const agentEnd = events.find((e) => e.type === "agent_end");
+		expect(agentEnd).toBeDefined();
+
+		// turn_end should be dropped because epoch was stale
+		const turnEnd = events.find((e) => e.type === "turn_end");
+		expect(turnEnd).toBeUndefined();
+	});
+
+	it("emits turn_end when checkEpoch returns true", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			checkEpoch: () => true,
+		};
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage([{ type: "text", text: "Hello!" }], "stop");
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// turn_end should be emitted when epoch is current
+		const turnEnd = events.find((e) => e.type === "turn_end");
+		expect(turnEnd).toBeDefined();
+
+		const agentEnd = events.find((e) => e.type === "agent_end");
+		expect(agentEnd).toBeDefined();
+	});
+
+	it("emits agent_end even when epoch is stale (cleanup event)", async () => {
+		const context: AgentContext = {
+			systemPrompt: "You are helpful.",
+			messages: [],
+			tools: [],
+		};
+
+		const userPrompt: AgentMessage = createUserMessage("Hello");
+
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			checkEpoch: () => false, // Always stale
+		};
+
+		const streamFn = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage([{ type: "text", text: "Hello!" }], "stop");
+				stream.push({ type: "done", reason: "stop", message });
+			});
+			return stream;
+		};
+
+		const stream = agentLoop([userPrompt], context, config, undefined, streamFn);
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) {
+			events.push(event);
+		}
+
+		// agent_end (cleanup) should still be emitted
+		const agentEnd = events.find((e) => e.type === "agent_end");
+		expect(agentEnd).toBeDefined();
+
+		// turn_end (user-visible) should be dropped
+		const turnEnd = events.find((e) => e.type === "turn_end");
+		expect(turnEnd).toBeUndefined();
+
+		// User prompt message_end is always emitted (before epoch check)
+		// But assistant message_end should be dropped when epoch is stale
+		const assistantMessageEnd = events.find((e) => e.type === "message_end" && e.message.role === "assistant");
+		expect(assistantMessageEnd).toBeUndefined();
 	});
 });

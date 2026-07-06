@@ -10,7 +10,7 @@ import {
 	streamSimple,
 	type ToolResultMessage,
 	validateToolArguments,
-} from "@earendil-works/pi-ai/compat";
+} from "@piki/ai/compat";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -203,12 +203,28 @@ async function runLoop(
 				return;
 			}
 
+			// Epoch check: if the turn was interrupted during streaming, drop stale
+			// user-visible events but still emit agent_end for cleanup handlers.
+			const epochStillCurrent = config.checkEpoch?.() ?? true;
+			if (!epochStillCurrent) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
+
 			// Check for tool calls
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
 			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
+				// Epoch check before starting tool execution: if the turn was interrupted
+				// during streaming, skip tool execution and drop stale results.
+				const epochBeforeTools = config.checkEpoch?.() ?? true;
+				if (!epochBeforeTools) {
+					await emit({ type: "turn_end", message, toolResults: [] });
+					await emit({ type: "agent_end", messages: newMessages });
+					return;
+				}
 				const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
@@ -217,6 +233,14 @@ async function runLoop(
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
+			}
+
+			// Epoch check after tool execution: if the turn was interrupted during
+			// tool execution, drop stale turn_end but still allow agent_end for cleanup.
+			const epochAfterTools = config.checkEpoch?.() ?? true;
+			if (!epochAfterTools) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
 			}
 
 			await emit({ type: "turn_end", message, toolResults });
@@ -255,6 +279,21 @@ async function runLoop(
 			}
 
 			pendingMessages = (await config.getSteeringMessages?.()) || [];
+
+			// Epoch check before continuing the inner loop: if the turn was interrupted
+			// after tool execution but before the next LLM call, stop processing.
+			const epochBeforeContinue = config.checkEpoch?.() ?? true;
+			if (!epochBeforeContinue) {
+				await emit({ type: "agent_end", messages: newMessages });
+				return;
+			}
+		}
+
+		// Epoch check before the outer loop continues: if the turn was interrupted
+		// while processing the inner loop, do not start a new outer iteration.
+		const epochOuterLoop = config.checkEpoch?.() ?? true;
+		if (!epochOuterLoop) {
+			break;
 		}
 
 		// Agent would stop here. Check for steering or follow-up messages.
@@ -361,10 +400,15 @@ async function streamAssistantResponse(
 				} else {
 					context.messages.push(finalMessage);
 				}
-				if (!addedPartial) {
-					await emit({ type: "message_start", message: { ...finalMessage } });
+				// Epoch check: if the turn was interrupted during streaming, drop
+				// user-visible message_end but still return the message for context.
+				const epochCurrent1 = config.checkEpoch?.() ?? true;
+				if (epochCurrent1) {
+					if (!addedPartial) {
+						await emit({ type: "message_start", message: { ...finalMessage } });
+					}
+					await emit({ type: "message_end", message: finalMessage });
 				}
-				await emit({ type: "message_end", message: finalMessage });
 				return finalMessage;
 			}
 		}
@@ -375,9 +419,16 @@ async function streamAssistantResponse(
 		context.messages[context.messages.length - 1] = finalMessage;
 	} else {
 		context.messages.push(finalMessage);
-		await emit({ type: "message_start", message: { ...finalMessage } });
 	}
-	await emit({ type: "message_end", message: finalMessage });
+	// Epoch check: if the turn was interrupted during streaming, drop
+	// user-visible message_start/message_end but still return the message.
+	const epochCurrent2 = config.checkEpoch?.() ?? true;
+	if (epochCurrent2) {
+		if (!addedPartial) {
+			await emit({ type: "message_start", message: { ...finalMessage } });
+		}
+		await emit({ type: "message_end", message: finalMessage });
+	}
 	return finalMessage;
 }
 

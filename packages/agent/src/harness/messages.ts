@@ -1,4 +1,4 @@
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, TextContent } from "@piki/ai";
 import type { AgentMessage } from "../types.ts";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
@@ -24,6 +24,9 @@ export interface BashExecutionMessage {
 	cancelled: boolean;
 	truncated: boolean;
 	fullOutputPath?: string;
+	startedAt?: number;
+	endedAt?: number;
+	durationMs?: number;
 	timestamp: number;
 	excludeFromContext?: boolean;
 }

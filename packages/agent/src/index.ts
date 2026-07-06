@@ -38,7 +38,13 @@ export * from "./harness/system-prompt.ts";
 export * from "./harness/types.ts";
 export * from "./harness/utils/shell-output.ts";
 export * from "./harness/utils/truncate.ts";
+// Projections
+export * from "./projections/outbound-messages.ts";
+export * from "./projections/task-worker.ts";
+export * from "./projections/worker-activity.ts";
 // Proxy utilities
 export * from "./proxy.ts";
+// Roles
+export * from "./roles/task-worker-role.ts";
 // Types
 export * from "./types.ts";
