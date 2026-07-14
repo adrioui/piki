@@ -23,6 +23,22 @@ import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
 
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const MAX_TIMEOUT_SECONDS = MAX_TIMEOUT_MS / 1000;
+
+function resolveTimeoutMs(timeout: number | undefined): number | undefined {
+	if (timeout === undefined) return undefined;
+	if (!Number.isFinite(timeout) || timeout <= 0) {
+		throw new Error("Invalid timeout: must be a finite number of seconds");
+	}
+
+	const timeoutMs = timeout * 1000;
+	if (timeoutMs > MAX_TIMEOUT_MS) {
+		throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
+	}
+	return timeoutMs;
+}
+
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
@@ -78,14 +94,15 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 	return {
 		isLocal: true,
 		exec: async (command, cwd, { onData, signal, timeout, env }) => {
+			const timeoutMs = resolveTimeoutMs(timeout);
+			if (signal?.aborted) {
+				throw new Error("aborted");
+			}
 			const shellConfig = getShellConfig(options?.shellPath);
 			try {
 				await fsAccess(cwd, constants.F_OK);
 			} catch {
 				throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
-			}
-			if (signal?.aborted) {
-				throw new Error("aborted");
 			}
 
 			const commandFromStdin = shellConfig.commandTransport === "stdin";
@@ -109,11 +126,11 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 
 			try {
 				// Set timeout if provided.
-				if (timeout !== undefined && timeout > 0) {
+				if (timeoutMs !== undefined) {
 					timeoutHandle = setTimeout(() => {
 						timedOut = true;
 						if (child.pid) killProcessTree(child.pid);
-					}, timeout * 1000);
+					}, timeoutMs);
 				}
 				// Stream stdout and stderr.
 				child.stdout?.on("data", onData);
@@ -570,4 +587,38 @@ export function createBashToolDefinition(
 
 export function createBashTool(cwd: string, options?: BashToolOptions): AgentTool<typeof bashSchema> {
 	return wrapToolDefinition(createBashToolDefinition(cwd, options));
+}
+
+const shellSchema = Type.Object({
+	command: Type.String({ description: "Shell command to execute" }),
+	detach_after: Type.Optional(
+		Type.Number({ description: "Seconds to wait before detaching (default: 30, min: 0, max: 60)" }),
+	),
+});
+
+export type ShellToolInput = Static<typeof shellSchema>;
+
+export function createShellToolDefinition(
+	cwd: string,
+	options?: BashToolOptions,
+): ToolDefinition<typeof shellSchema, BashToolDetails | undefined, BashRenderState> {
+	const bashDef = createBashToolDefinition(cwd, options);
+	return {
+		...bashDef,
+		name: "shell",
+		label: "shell",
+		description:
+			"Execute a shell command. By default, commands are given 30 seconds to complete. If a command finishes within that time, you receive its output directly. If it takes longer, the command continues running in the background and you receive a detached result with paths to its output files.",
+		promptSnippet: undefined,
+		promptGuidelines: undefined,
+		parameters: shellSchema,
+		async execute(toolCallId, input: ShellToolInput, signal, onUpdate, ctx) {
+			const { command, detach_after } = input;
+			return bashDef.execute(toolCallId, { command, timeout: detach_after }, signal, onUpdate, ctx);
+		},
+	};
+}
+
+export function createShellTool(cwd: string, options?: BashToolOptions): AgentTool<typeof shellSchema> {
+	return wrapToolDefinition(createShellToolDefinition(cwd, options));
 }

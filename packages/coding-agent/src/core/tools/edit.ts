@@ -38,7 +38,7 @@ const replaceEditSchema = Type.Object(
 		}),
 		new: Type.String({ description: "Replacement text for this targeted edit." }),
 	},
-	{ additionalProperties: false },
+	{},
 );
 
 const editSchema = Type.Object(
@@ -53,7 +53,7 @@ const editSchema = Type.Object(
 		old: Type.Optional(Type.String({ description: "Single edit: exact text to find." })),
 		new: Type.Optional(Type.String({ description: "Single edit: replacement text." })),
 	},
-	{ additionalProperties: false },
+	{},
 );
 
 export type EditToolInput = Static<typeof editSchema>;
@@ -324,6 +324,20 @@ export function createEditToolDefinition(
 		parameters: editSchema,
 		renderShell: "self",
 		prepareArguments: prepareEditArguments,
+		stream: {
+			onInput: (input: unknown): void => {
+				const typedInput = input as Partial<EditToolInput>;
+				if (typeof typedInput?.path !== "string" || typedInput.path.length === 0) return;
+				try {
+					const absolutePath = resolveToCwd(typedInput.path, cwd);
+					ops.access(absolutePath);
+				} catch {
+					throw new Error(`File not found: ${typedInput.path}`);
+				}
+			},
+		},
+		emissionSchema: undefined,
+		errorSchema: undefined,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
 			const { path, edits } = validateEditInput(input);
 			const absolutePath = resolveToCwd(path, cwd);

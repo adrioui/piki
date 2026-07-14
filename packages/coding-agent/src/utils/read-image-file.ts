@@ -1,7 +1,6 @@
 // File-path → LLM-vision reader. Thin wrapper over resizeImage +
-// detectSupportedImageMimeTypeFromFile, mirroring magnitude's
-// packages/agent/src/util/read-image-file.ts (artifact 85719) but using
-// pi's photon pipeline instead of Bun.Image.
+// detectSupportedImageMimeTypeFromFile that uses pi's photon pipeline
+// instead of Bun.Image.
 
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
@@ -9,13 +8,13 @@ import { type ImageResizeOptions, type ResizedImage, resizeImage } from "./image
 import { detectSupportedImageMimeTypeFromFile } from "./mime.ts";
 
 export interface ReadImageFileOptions {
-	/** Max long-edge in px (magnitude default 1568; pi's resizeImage default is 2000). */
+	/** Max long-edge in px (default 1568; pi's resizeImage default is 2000). */
 	maxLongEdge?: number;
 	/** JPEG quality for fallback JPEG encode. Default 80 (pi's resizeImage default). */
 	jpegQuality?: number;
 	/** Max base64-payload size in bytes. Default 4.5 MB (pi's resizeImage default; Anthropic 5MB headroom). */
 	maxEncodedBytes?: number;
-	/** Pass SVG through as base64 with mediaType "image/png" (magnitude behaviour). Default true. */
+	/** Pass SVG through as base64 with mediaType "image/png". Default true. */
 	allowSvgPassthrough?: boolean;
 }
 
@@ -33,7 +32,7 @@ const DEFAULT_MAX_BYTES = 4.5 * 1024 * 1024;
  * Read an image file and prepare it for LLM vision input.
  *
  * SVG → passthrough (base64, mediaType "image/png", width/height 0).
- *   Mirrors magnitude's deliberate "model re-rasterises" assumption.
+ *   Preserves the deliberate "model re-rasterises" assumption.
  * Raster (PNG/JPEG/GIF/WEBP) → delegate to pi's resizeImage (photon + worker).
  * Unknown format → throw.
  */
@@ -48,7 +47,7 @@ export async function readImageFileForModel(
 
 	const buf = new Uint8Array(await readFile(absolutePath));
 
-	// SVG: photon/mime sniffers return null; magnitude passes through.
+	// SVG: photon/mime sniffers return null; pass the bytes through unchanged.
 	const lower = basename(absolutePath).toLowerCase();
 	if (allowSvg && lower.endsWith(".svg")) {
 		return {
@@ -73,7 +72,7 @@ export async function readImageFileForModel(
 	const resized: ResizedImage | null = await resizeImage(buf, detected, resizeOpts);
 	if (!resized) {
 		// resizeImage returns null when photon unavailable or target too large.
-		// Fall back to sending the original bytes (magnitude would have thrown).
+		// Fall back to sending the original bytes.
 		return {
 			base64: Buffer.from(buf).toString("base64"),
 			mediaType: detected,

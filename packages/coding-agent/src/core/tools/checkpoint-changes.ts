@@ -1,9 +1,8 @@
 /**
  * checkpoint_changes tool: Show what files changed since a previous snapshot.
  *
- * Inspired by Magnitude's checkpoint_changes tool which lets the agent
- * inspect its own changes since a turn boundary. Operates on the private
- * snapshot system, not the user's git repository.
+ * Lets the agent inspect its own changes since a turn boundary. Operates on
+ * the private snapshot system, not the user's git repository.
  */
 
 import type { AgentToolResult } from "@piki/agent-core";
@@ -73,7 +72,7 @@ export function createCheckpointChangesToolDefinition(
 					};
 				}
 
-				const summary = `Changed files (${changedFiles.length}):\n${changedFiles.map((f) => `  ${f}`).join("\n")}`;
+				const summary = `Changed files (${changedFiles.length}):\n${changedFiles.map((f) => ` ${f}`).join("\n")}`;
 				const diffText = diff ? `\n\nDiff:\n${diff}` : "";
 
 				return {

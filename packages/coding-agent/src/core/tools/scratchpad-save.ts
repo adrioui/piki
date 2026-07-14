@@ -1,8 +1,7 @@
 /**
  * scratchpad_save tool: Save an artifact to the session scratchpad.
  *
- * Inspired by Magnitude's scratchpad system which provides durable
- * artifact storage for designs, plans, reports, and results.
+ * Provides durable artifact storage for designs, plans, reports, and results.
  */
 
 import type { AgentToolResult } from "@piki/agent-core";

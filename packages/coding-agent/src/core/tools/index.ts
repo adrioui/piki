@@ -8,7 +8,11 @@ export {
 	createBashTool,
 	createBashToolDefinition,
 	createLocalBashOperations,
+	createShellTool,
+	createShellToolDefinition,
+	type ShellToolInput,
 } from "./bash.ts";
+export { type CompactToolOptions, createCompactToolDefinition } from "./compact.ts";
 export {
 	createEditTool,
 	createEditToolDefinition,
@@ -42,6 +46,7 @@ export {
 	type LsToolInput,
 	type LsToolOptions,
 } from "./ls.ts";
+export { createQueryImageToolDefinition, type QueryImageToolOptions } from "./query-image.ts";
 export {
 	createReadTool,
 	createReadToolDefinition,
@@ -50,6 +55,7 @@ export {
 	type ReadToolInput,
 	type ReadToolOptions,
 } from "./read.ts";
+export { createSkillToolDefinition, type SkillToolOptions } from "./skill.ts";
 export {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -72,18 +78,57 @@ export {
 
 import type { AgentTool } from "@piki/agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
-import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
+import {
+	type BashToolOptions,
+	createBashTool,
+	createBashToolDefinition,
+	createShellTool,
+	createShellToolDefinition,
+} from "./bash.ts";
+import { type CompactToolOptions, createCompactToolDefinition } from "./compact.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
+import { createQueryImageToolDefinition, type QueryImageToolOptions } from "./query-image.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
+import { createSkillToolDefinition, type SkillToolOptions } from "./skill.ts";
+import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { createWebFetchToolDefinition } from "./web-fetch.ts";
+import { createWebSearchToolDefinition } from "./web-search.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+export type ToolName =
+	| "read"
+	| "bash"
+	| "edit"
+	| "write"
+	| "grep"
+	| "find"
+	| "ls"
+	| "shell"
+	| "compact"
+	| "web_search"
+	| "web_fetch"
+	| "query_image"
+	| "skill";
+export const allToolNames: Set<ToolName> = new Set([
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"shell",
+	"compact",
+	"web_search",
+	"web_fetch",
+	"query_image",
+	"skill",
+]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -93,6 +138,18 @@ export interface ToolsOptions {
 	grep?: GrepToolOptions;
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
+	/** Scratchpad directory, used by tools to resolve $M/ paths. */
+	scratchpadPath?: string;
+	/** Options for the compact tool. */
+	compact?: CompactToolOptions;
+	/** Options for the query_image tool. */
+	queryImage?: QueryImageToolOptions;
+	/** Options for the skill tool. */
+	skill?: SkillToolOptions;
+	/** Options for the web_search tool. */
+	webSearch?: Record<string, never>;
+	/** Options for the web_fetch tool. */
+	webFetch?: Record<string, never>;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -111,6 +168,18 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createFindToolDefinition(cwd, options?.find);
 		case "ls":
 			return createLsToolDefinition(cwd, options?.ls);
+		case "shell":
+			return createShellToolDefinition(cwd, options?.bash);
+		case "compact":
+			return createCompactToolDefinition(options?.compact);
+		case "web_search":
+			return createWebSearchToolDefinition();
+		case "web_fetch":
+			return createWebFetchToolDefinition();
+		case "query_image":
+			return createQueryImageToolDefinition(cwd, options?.queryImage);
+		case "skill":
+			return createSkillToolDefinition(options?.skill);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -132,9 +201,26 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createFindTool(cwd, options?.find);
 		case "ls":
 			return createLsTool(cwd, options?.ls);
+		case "shell":
+			return createShellTool(cwd, options?.bash);
+		case "compact":
+			return wrapDefined(createCompactToolDefinition(options?.compact));
+		case "web_search":
+			return wrapDefined(createWebSearchToolDefinition());
+		case "web_fetch":
+			return wrapDefined(createWebFetchToolDefinition());
+		case "query_image":
+			return wrapDefined(createQueryImageToolDefinition(cwd, options?.queryImage));
+		case "skill":
+			return wrapDefined(createSkillToolDefinition(options?.skill));
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
+}
+
+/** Adapter that wraps a ToolDefinition into an AgentTool (AgentTool<any>). */
+function wrapDefined(def: ToolDefinition<any, any>): Tool {
+	return wrapToolDefinition(def);
 }
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
@@ -164,6 +250,12 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd, options?.grep),
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
+		shell: createShellToolDefinition(cwd, options?.bash),
+		compact: createCompactToolDefinition(options?.compact),
+		web_search: createWebSearchToolDefinition(),
+		web_fetch: createWebFetchToolDefinition(),
+		query_image: createQueryImageToolDefinition(cwd, options?.queryImage),
+		skill: createSkillToolDefinition(options?.skill),
 	};
 }
 
@@ -194,5 +286,11 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd, options?.grep),
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
+		shell: createShellTool(cwd, options?.bash),
+		compact: wrapDefined(createCompactToolDefinition(options?.compact)),
+		web_search: wrapDefined(createWebSearchToolDefinition()),
+		web_fetch: wrapDefined(createWebFetchToolDefinition()),
+		query_image: wrapDefined(createQueryImageToolDefinition(cwd, options?.queryImage)),
+		skill: wrapDefined(createSkillToolDefinition(options?.skill)),
 	};
 }
