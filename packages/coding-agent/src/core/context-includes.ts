@@ -2,11 +2,11 @@
  * AGENTS.md / CLAUDE.md @file includes and glob-scoped guidance.
  *
  * Supports Amp-style `@path` mentions inside project context files:
- *   - `@relative/path.md` resolves relative to the file containing the mention.
- *   - `@~/path` and `@/abs/path` resolve via home / absolute.
- *   - Mentions inside fenced code blocks are ignored.
- *   - Cycles and duplicate includes are prevented.
- *   - Total included content is size-bounded to avoid prompt injection bloat.
+ * - `@relative/path.md` resolves relative to the file containing the mention.
+ * - `@~/path` and `@/abs/path` resolve via home / absolute.
+ * - Mentions inside fenced code blocks are ignored.
+ * - Cycles and duplicate includes are prevented.
+ * - Total included content is size-bounded to avoid prompt injection bloat.
  *
  * Glob-scoped guidance: an included markdown file may declare YAML frontmatter
  * with a `globs` array (e.g. src globs ending in .ts) so it only applies when

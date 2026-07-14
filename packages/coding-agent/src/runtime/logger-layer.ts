@@ -39,7 +39,7 @@ function resolveWriter(options: ConsoleLoggerOptions): (line: string) => void {
  * The log effect never throws — circular references in fields are caught
  * and replaced with a placeholder string.
  */
-export function makeConsoleLoggerLayer(options: ConsoleLoggerOptions = {}): Layer.Layer<Logger, never, never> {
+export function makeConsoleLoggerLayer(options: ConsoleLoggerOptions = {}) {
 	const minLevel = options.minLevel ?? "info";
 	const minPriority = LEVEL_PRIORITY[minLevel];
 	const write = resolveWriter(options);

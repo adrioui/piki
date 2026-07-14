@@ -33,7 +33,7 @@ import {
 	type ProjectionDefinition,
 	type RoleDefinition,
 } from "@piki/event-core";
-import { Effect, Exit, type Fiber, Queue, Scope } from "effect";
+import { Effect, ExecutionStrategy, Exit, Fiber, Queue, Scope } from "effect";
 import { AgentModelResolver } from "./agent-model-resolver.ts";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { AgentSessionServices } from "./agent-session-services.ts";
@@ -511,7 +511,7 @@ export class SessionOrchestrator {
 	private readonly metaPath?: string;
 	private readonly projectionsPath?: string;
 	private readonly controller = new AbortController();
-	private readonly cleanupScope = Scope.makeUnsafe("sequential");
+	private readonly cleanupScope = Effect.runSync(Scope.make(ExecutionStrategy.sequential));
 	private readonly existingEvents: RuntimeEvent[];
 	private readonly forkRuntime: ForkRuntime;
 	private readonly thinkingGovernor: ThinkingGovernor;
@@ -729,7 +729,7 @@ export class SessionOrchestrator {
 			() => this.streamingParsers.clear(),
 			() => {
 				void Effect.runPromise(Queue.shutdown(this.eventQueue));
-				this.eventConsumerFiber.interruptUnsafe();
+				void Effect.runPromise(Fiber.interrupt(this.eventConsumerFiber));
 			},
 		]) {
 			Effect.runSync(Scope.addFinalizer(this.cleanupScope, Effect.sync(finalizer)));

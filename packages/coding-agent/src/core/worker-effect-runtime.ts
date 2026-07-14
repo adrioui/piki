@@ -1,14 +1,14 @@
-import { Effect, Fiber, Queue, Semaphore } from "effect";
+import { Effect, Fiber, Queue, STM, TSemaphore } from "effect";
 import type { WorkerSession } from "./worker-session.ts";
 
 export class WorkerEffectRuntime {
-	private readonly registrySemaphore = Semaphore.makeUnsafe(1);
+	private readonly registrySemaphore = Effect.runSync(STM.commit(TSemaphore.make(1)));
 	private readonly messageQueues = new Map<string, Queue.Queue<string>>();
 	private readonly fibers = new Map<string, Fiber.Fiber<void, unknown>>();
 
 	async createMessageQueue(agentId: string): Promise<Queue.Queue<string>> {
 		return Effect.runPromise(
-			this.registrySemaphore.withPermit(
+			TSemaphore.withPermit(this.registrySemaphore)(
 				Effect.sync(() => {
 					let queue = this.messageQueues.get(agentId);
 					if (!queue) {
@@ -28,12 +28,14 @@ export class WorkerEffectRuntime {
 
 	async drainMessages(agentId: string, deliver: (message: string) => void): Promise<void> {
 		const queue = await this.createMessageQueue(agentId);
-		let next = Queue.takeUnsafe(queue);
-		while (next) {
-			if (next._tag === "Success") {
-				deliver(next.value);
+		// Queue.take blocks until a value; queue shutdown causes Effect.fail
+		for (;;) {
+			const exit = await Effect.runPromiseExit(Queue.take(queue));
+			if (exit._tag === "Success") {
+				deliver(exit.value);
+			} else {
+				break; // queue shut down
 			}
-			next = Queue.takeUnsafe(queue);
 		}
 	}
 
@@ -59,7 +61,7 @@ export class WorkerEffectRuntime {
 
 	async removeWorker(agentId: string): Promise<void> {
 		await Effect.runPromise(
-			this.registrySemaphore.withPermit(
+			TSemaphore.withPermit(this.registrySemaphore)(
 				Effect.sync(() => {
 					this.messageQueues.delete(agentId);
 					this.fibers.delete(agentId);
@@ -68,12 +70,12 @@ export class WorkerEffectRuntime {
 		);
 	}
 
-	dispose(sessions: Iterable<WorkerSession>): void {
+	async dispose(sessions: Iterable<WorkerSession>): Promise<void> {
 		for (const session of sessions) {
 			session.kill();
 		}
 		for (const fiber of this.fibers.values()) {
-			fiber.interruptUnsafe();
+			await Effect.runPromise(Fiber.interrupt(fiber));
 		}
 		this.fibers.clear();
 		this.messageQueues.clear();

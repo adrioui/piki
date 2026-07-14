@@ -46,7 +46,7 @@ export interface WalkOptions {
 	followSymlinks?: boolean; // default false (SKIP symlinks)
 }
 
-/** Rebase a gitignore pattern against a relative dir path (magnitude semantics). */
+/** Rebase a gitignore pattern against a relative dir path. */
 export function rebasePattern(pattern: string, relativeDirPath: string): string {
 	const isNegated = pattern.startsWith("!");
 	const p = isNegated ? pattern.slice(1) : pattern;

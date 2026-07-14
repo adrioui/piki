@@ -3,7 +3,7 @@
  * user/assistant exchange.
  *
  * - Uses an aux/fast model when available, with deterministic fallback
- *   from the first user text.
+ * from the first user text.
  * - Persists via session_info (appendSessionInfo), never direct metadata mutation.
  * - Does not overwrite manual --name or /name.
  * - Emits title lifecycle runtime events.

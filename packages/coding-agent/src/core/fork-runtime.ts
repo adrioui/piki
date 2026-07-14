@@ -4,14 +4,14 @@
  * Runtime adapter that publishes agent_created, agent_finished, task, and goal
  * events via the SessionOrchestrator's publishRuntimeEvent.
  *
- * Mirrors Magnitude's fork-worker runtime: each role tool call publishes
- * the appropriate event-core event, which projections and roles react to.
- * Role model selection uses AgentModelResolver for tier-based routing.
+ * Each role tool call publishes the appropriate event-core event, which
+ * projections and roles react to. Role model selection uses AgentModelResolver
+ * for tier-based routing.
  */
 
 import { randomUUID } from "node:crypto";
 import { SPAWNABLE_ROLES } from "@piki/event-core";
-import { Effect, Semaphore } from "effect";
+import { Effect, STM, TSemaphore } from "effect";
 
 export type PublishFn = (type: string, payload: Record<string, unknown>) => Promise<void>;
 
@@ -92,7 +92,7 @@ export class ForkRuntime {
 	private readonly workerForkIds = new Map<string, string>();
 	/** taskId → agentId currently assigned, so reassign can kill the prior worker. */
 	private readonly taskAssignees = new Map<string, string>();
-	private readonly mutationSemaphore = Semaphore.makeUnsafe(1);
+	private readonly mutationSemaphore = Effect.runSync(STM.commit(TSemaphore.make(1)));
 
 	constructor(options: ForkRuntimeOptions) {
 		this.sessionId = options.sessionId;
@@ -102,7 +102,7 @@ export class ForkRuntime {
 	}
 
 	private withMutation<T>(run: () => Promise<T>): Promise<T> {
-		return Effect.runPromise(this.mutationSemaphore.withPermit(Effect.tryPromise(run)));
+		return Effect.runPromise(TSemaphore.withPermit(this.mutationSemaphore)(Effect.tryPromise(run)));
 	}
 
 	/**

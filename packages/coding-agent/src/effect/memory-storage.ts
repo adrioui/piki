@@ -19,7 +19,7 @@ export interface MemoryStorageShape {
 	readonly sweepExpired: () => Effect.Effect<number>;
 }
 
-export class MemoryStorage extends Context.Service<MemoryStorage, MemoryStorageShape>()("MemoryStorage") {}
+export const MemoryStorage = Context.GenericTag<MemoryStorageShape>("MemoryStorage");
 
 export const DEFAULT_MEMORY_CAPACITY = 1024;
 
@@ -33,7 +33,7 @@ export function makeMemoryStorageLayer(opts?: {
 	capacity?: number;
 	/** Inject a clock function for testability. Defaults to Date.now. */
 	now?: () => number;
-}): Layer.Layer<MemoryStorage, never, never> {
+}) {
 	const capacity = opts?.capacity ?? DEFAULT_MEMORY_CAPACITY;
 	const now = opts?.now ?? (() => Date.now());
 

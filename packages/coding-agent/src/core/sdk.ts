@@ -68,7 +68,7 @@ export interface CreateAgentSessionOptions {
 	 *
 	 * - "all": start with no tools enabled
 	 * - "builtin": disable the default built-in tools (read, bash, edit, write)
-	 *   but keep extension/custom tools enabled
+	 * but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
@@ -114,6 +114,7 @@ export type {
 	ExtensionCommandContext,
 	ExtensionContext,
 	ExtensionFactory,
+	InlineExtension,
 	SlashCommandInfo,
 	SlashCommandSource,
 	ToolDefinition,
@@ -296,27 +297,27 @@ export function streamSimpleWithApiKeyResolver(
  * // With explicit model
  * import { getModel } from '@piki/ai';
  * const { session } = await createAgentSession({
- *   model: getModel('anthropic', 'claude-opus-4-5'),
- *   thinkingLevel: 'high',
+ * model: getModel('anthropic', 'claude-opus-4-5'),
+ * thinkingLevel: 'high',
  * });
  *
  * // Continue previous session
  * const { session, modelFallbackMessage } = await createAgentSession({
- *   continueSession: true,
+ * continueSession: true,
  * });
  *
  * // Full control
  * const loader = new DefaultResourceLoader({
- *   cwd: process.cwd(),
- *   agentDir: getAgentDir(),
- *   settingsManager: SettingsManager.create(),
+ * cwd: process.cwd(),
+ * agentDir: getAgentDir(),
+ * settingsManager: SettingsManager.create(),
  * });
  * await loader.reload();
  * const { session } = await createAgentSession({
- *   model: myModel,
- *   tools: ["read", "bash"],
- *   resourceLoader: loader,
- *   sessionManager: SessionManager.inMemory(),
+ * model: myModel,
+ * tools: ["read", "bash"],
+ * resourceLoader: loader,
+ * sessionManager: SessionManager.inMemory(),
  * });
  * ```
  */
@@ -469,6 +470,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const timeoutMs = options?.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs;
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
+			let headers = mergeProviderAttributionHeaders(
+				model,
+				settingsManager,
+				options?.sessionId,
+				auth.headers,
+				options?.headers,
+			);
+			// Let extensions inject/adjust per-request headers (e.g. tracing, session correlation)
+			// after static assembly, before the provider HTTP call.
+			const headerRunner = extensionRunnerRef.current;
+			if (headerRunner?.hasHandlers("before_provider_headers")) {
+				headers = await headerRunner.emitBeforeProviderHeaders(headers ?? {});
+			}
 			const streamOptions = {
 				...options,
 				apiKey: auth.apiKey,
@@ -477,13 +491,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
 				maxRetryDelayMs: options?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-				headers: mergeProviderAttributionHeaders(
-					model,
-					settingsManager,
-					options?.sessionId,
-					auth.headers,
-					options?.headers,
-				),
+				headers,
 			};
 			const response = auth.apiKeyResolver
 				? streamSimpleWithApiKeyResolver(model, context, streamOptions, auth.apiKeyResolver)

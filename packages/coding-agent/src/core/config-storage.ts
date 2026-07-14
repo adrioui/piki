@@ -34,7 +34,7 @@ export interface ConfigStorageShape {
 	) => Effect.Effect<ResolvedModelConfig, ConfigResolutionError>;
 }
 
-export class ConfigStorage extends Context.Service<ConfigStorage, ConfigStorageShape>()("ConfigStorage") {}
+export const ConfigStorage = Context.GenericTag<ConfigStorageShape>("ConfigStorage");
 
 // ── error type ──────────────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ function resolveModelFromRegistry(
 
 // ── layer factory ───────────────────────────────────────────────────────────────
 
-export function makeConfigStorageLayer(modelRegistry: ModelRegistry): Layer.Layer<ConfigStorage, never, never> {
+export function makeConfigStorageLayer(modelRegistry: ModelRegistry) {
 	const resolveBody = (
 		modelId: string,
 		override?: Partial<Pick<ResolvedModelConfig, "contextWindow" | "maxOutputTokens">>,

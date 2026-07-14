@@ -1,9 +1,9 @@
-import { Effect, Exit, Scope } from "effect";
+import { Effect, ExecutionStrategy, Exit, Scope } from "effect";
 
 export type SessionOperation = "compaction" | "branchSummary" | "retry" | "bash";
 
 export class SessionCancellationScope {
-	private scope = Scope.makeUnsafe("sequential");
+	private scope = Effect.runSync(Scope.make(ExecutionStrategy.sequential));
 	private readonly controllers = new Map<SessionOperation, AbortController>();
 
 	create(operation: SessionOperation): AbortController {
@@ -40,6 +40,6 @@ export class SessionCancellationScope {
 	close(): void {
 		Effect.runSync(Scope.close(this.scope, Exit.void));
 		this.controllers.clear();
-		this.scope = Scope.makeUnsafe("sequential");
+		this.scope = Effect.runSync(Scope.make(ExecutionStrategy.sequential));
 	}
 }

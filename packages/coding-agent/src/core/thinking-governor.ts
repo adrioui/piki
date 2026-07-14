@@ -5,7 +5,7 @@
  * overthinking feedback when the accumulated thinking exceeds maxThoughtChars.
  * Counters are reset after a retry or successful completion.
  *
- * Mirrors Magnitude's overthinking prevention: open-weight models can
+ * Overthinking prevention: open-weight models can
  * get stuck in long thinking loops. The governor caps thinking length
  * and signals the agent to stop overthinking and act.
  */

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getSupportedThinkingLevels } from "@piki/ai";
 import type { AnthropicMessagesCompat, Api, Context, Model, OpenAICompletionsCompat } from "@piki/ai/compat";
 import { getApiProvider } from "@piki/ai/compat";
 import { getOAuthProvider } from "@piki/ai/oauth";
@@ -930,6 +931,63 @@ describe("ModelRegistry", () => {
 				],
 			});
 			expect(registry.getProviderDisplayName("oauth-provider")).toBe("OAuth Provider");
+		});
+
+		test("modelOverrides apply to dynamically registered provider models", async () => {
+			writeRawModelsJson({
+				"extension-provider": {
+					modelOverrides: {
+						"extension-model": {
+							name: "Overridden Extension Model",
+							thinkingLevelMap: {
+								off: null,
+								minimal: null,
+								low: null,
+								medium: null,
+								xhigh: "max",
+							},
+							headers: { "x-model-override": "enabled" },
+						},
+					},
+				},
+			});
+
+			const registry = ModelRegistry.create(authStorage, modelsJsonPath);
+			registry.registerProvider("extension-provider", {
+				baseUrl: "https://provider.test/v1",
+				apiKey: "test-key",
+				api: "openai-completions",
+				models: [
+					{
+						id: "extension-model",
+						name: "Extension Model",
+						reasoning: true,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 128000,
+						maxTokens: 4096,
+					},
+				],
+			});
+
+			const model = registry.find("extension-provider", "extension-model");
+			expect(model).toBeDefined();
+			if (!model) {
+				throw new Error("extension model was not registered");
+			}
+			expect(model.name).toBe("Overridden Extension Model");
+			expect(model.thinkingLevelMap).toEqual({
+				off: null,
+				minimal: null,
+				low: null,
+				medium: null,
+				xhigh: "max",
+			});
+			expect(getSupportedThinkingLevels(model)).toEqual(["high", "xhigh"]);
+			expect(await registry.getApiKeyAndHeaders(model)).toMatchObject({
+				ok: true,
+				headers: { "x-model-override": "enabled" },
+			});
 		});
 
 		test("stored API key env propagates to request auth and resolves headers", async () => {

@@ -39,8 +39,8 @@ export interface Args {
 	print?: boolean;
 	export?: string;
 	atif?: string;
-	/** ATIF schema shape: "pi" (default) or "magnitude" (Magnitude-compatible) */
-	atifSchema?: "pi" | "magnitude";
+	/** ATIF schema shape: "pi" (default) or "flat" (flat-schema export) */
+	atifSchema?: "pi" | "flat";
 	noSkills?: boolean;
 	skills?: string[];
 	promptTemplates?: string[];
@@ -65,7 +65,7 @@ export interface Args {
 	diagnostics: Array<{ type: "warning" | "error"; message: string }>;
 }
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
@@ -171,12 +171,12 @@ export function parseArgs(args: string[]): Args {
 			result.atif = args[++i];
 		} else if (arg === "--atif-schema" && i + 1 < args.length) {
 			const schema = args[++i];
-			if (schema === "pi" || schema === "magnitude") {
+			if (schema === "pi" || schema === "flat") {
 				result.atifSchema = schema;
 			} else {
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid ATIF schema "${schema}". Valid values: pi, magnitude`,
+					message: `Invalid ATIF schema "${schema}". Valid values: pi, flat`,
 				});
 			}
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
@@ -301,7 +301,7 @@ ${chalk.bold("Options:")}
                                  Applies to built-in, extension, and custom tools
   --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
                                  Applies to built-in, extension, and custom tools
-  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh
+  --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)

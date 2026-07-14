@@ -13,7 +13,7 @@ export interface LoggerShape {
 	readonly namespace: (ns: string) => Effect.Effect<LoggerShape>;
 }
 
-export class Logger extends Context.Service<Logger, LoggerShape>()("Logger") {}
+export const Logger = Context.GenericTag<LoggerShape>("Logger");
 
 const noopShape = (nsStack: string[]): LoggerShape => ({
 	log: (_level: LogLevel, _fields: LogFields) => Effect.void,
@@ -21,4 +21,4 @@ const noopShape = (nsStack: string[]): LoggerShape => ({
 });
 
 /** No-op layer — default when no sink is configured. Never fails, does nothing. */
-export const LoggerNoop: Layer.Layer<Logger, never, never> = Layer.succeed(Logger, noopShape([]));
+export const LoggerNoop = Layer.succeed(Logger, noopShape([]));

@@ -31,9 +31,7 @@ export interface CreateSessionRuntimeServicesOptions {
 	publishRuntimeEvent?: RuntimeEventPublisher;
 }
 
-export class SessionRuntimeServices extends Context.Service<SessionRuntimeServices, SessionRuntimeServicesShape>()(
-	"SessionRuntimeServices",
-) {}
+export const SessionRuntimeServices = Context.GenericTag<SessionRuntimeServicesShape>("SessionRuntimeServices");
 
 export function createSessionRuntimeServices(
 	options: CreateSessionRuntimeServicesOptions,

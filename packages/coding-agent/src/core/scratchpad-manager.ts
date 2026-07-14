@@ -2,7 +2,7 @@
  * Hierarchical Scratchpad Manager - Phase 5
  *
  * Creates a structured hierarchy for durable artifacts produced during agent sessions.
- * Mirrors Magnitude's scratchpad organization:
+ * Hierarchical scratchpad organization:
  * - designs/: Architecture decisions, system designs, component specifications
  * - plans/: Implementation plans, migration strategies, task breakdowns
  * - reports/: Analysis reports, audit findings, investigation summaries

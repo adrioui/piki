@@ -101,9 +101,9 @@ export interface AtifTrajectoryV17 {
 }
 
 /**
- * ATIF v1.7 trajectory (Magnitude-compatible flat schema)
+ * ATIF v1.7 trajectory (flat schema)
  */
-export interface AtifTrajectoryMagnitude {
+export interface AtifTrajectoryV17Flat {
 	/** Schema version identifier */
 	schema_version: "ATIF-v1.7";
 	/** Optional session ID */
@@ -140,7 +140,7 @@ export interface AtifTrajectoryLegacy {
 }
 
 /** Union type for all ATIF versions */
-export type AtifTrajectory = AtifTrajectoryV17 | AtifTrajectoryLegacy | AtifTrajectoryMagnitude;
+export type AtifTrajectory = AtifTrajectoryV17 | AtifTrajectoryLegacy | AtifTrajectoryV17Flat;
 
 // ============================================================================
 // Pure Conversion Functions
@@ -308,13 +308,10 @@ export function buildAtifMetadata(sessionHeader: SessionHeader | null, entries: 
 }
 
 /**
- * Export session as ATIF v1.7 Magnitude-compatible trajectory.
- * Uses Magnitude's flat schema shape for interop with Magnitude consumers.
+ * Export session as ATIF v1.7 flat-schema trajectory.
+ * Uses a flat schema shape for interoperability with consumers expecting the flat layout.
  */
-export function exportAtifV17Magnitude(
-	sessionHeader: SessionHeader | null,
-	entries: SessionEntry[],
-): AtifTrajectoryMagnitude {
+export function exportAtifV17Flat(sessionHeader: SessionHeader | null, entries: SessionEntry[]): AtifTrajectoryV17Flat {
 	// Extract model name and agent info from entries
 	let model: string | undefined;
 	let messageCount = 0;

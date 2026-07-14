@@ -1,4 +1,4 @@
-import { Effect, Semaphore } from "effect";
+import { Effect, STM, TSemaphore } from "effect";
 
 export type WorkerLifecycleStatus = "created" | "running" | "finished" | "killed" | "error" | "cleaned";
 
@@ -23,10 +23,10 @@ export type WorkerLifecycleAction =
 export class WorkerLifecycleRegistry {
 	private readonly records = new Map<string, WorkerLifecycleRecord>();
 	private readonly forkAgents = new Map<string, Set<string>>();
-	private readonly semaphore = Semaphore.makeUnsafe(1);
+	private readonly semaphore = Effect.runSync(STM.commit(TSemaphore.make(1)));
 
 	apply(action: WorkerLifecycleAction): Effect.Effect<WorkerLifecycleRecord | undefined> {
-		return this.semaphore.withPermit(Effect.sync(() => this.applyUnsafe(action)));
+		return TSemaphore.withPermit(this.semaphore)(Effect.sync(() => this.applyUnsafe(action)));
 	}
 
 	snapshot(): WorkerLifecycleRecord[] {

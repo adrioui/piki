@@ -7,7 +7,6 @@ const NVIDIA_NIM_HOST = "integrate.api.nvidia.com";
 const CLOUDFLARE_API_HOST = "api.cloudflare.com";
 const CLOUDFLARE_AI_GATEWAY_HOST = "gateway.ai.cloudflare.com";
 const OPENCODE_HOST = "opencode.ai";
-const VERCEL_GATEWAY_HOST = "ai-gateway.vercel.sh";
 
 function matchesHost(baseUrl: string, expectedHost: string): boolean {
 	try {
@@ -34,8 +33,10 @@ function isCloudflareModel(model: Model<Api>): boolean {
 	);
 }
 
+const VERCEL_AI_GATEWAY_HOST = "ai-gateway.vercel.sh";
+
 function isVercelGatewayModel(model: Model<Api>): boolean {
-	return model.provider === "vercel-ai-gateway" || matchesHost(model.baseUrl, VERCEL_GATEWAY_HOST);
+	return model.provider === "vercel-ai-gateway" || matchesHost(model.baseUrl, VERCEL_AI_GATEWAY_HOST);
 }
 
 function getDefaultAttributionHeaders(
