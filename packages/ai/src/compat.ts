@@ -209,6 +209,7 @@ export function resetApiProviders(): void {
 registerBuiltInApiProviders();
 
 const compatModels = builtinModels();
+const AMBIENT_AUTH_MARKER = "<authenticated>";
 
 function hasExplicitApiKey(apiKey: string | undefined): apiKey is string {
 	return typeof apiKey === "string" && apiKey.trim().length > 0;
@@ -220,7 +221,7 @@ function withEnvApiKey<TOptions extends StreamOptions>(
 ): TOptions | undefined {
 	if (hasExplicitApiKey(options?.apiKey)) return options;
 	const apiKey = getEnvApiKey(model.provider, options?.env);
-	if (!apiKey) return options;
+	if (!apiKey || apiKey === AMBIENT_AUTH_MARKER) return options;
 	return { ...options, apiKey } as TOptions;
 }
 

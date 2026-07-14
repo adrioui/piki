@@ -134,7 +134,7 @@ describe("bedrock convertMessages skips unknown content types", () => {
 
 	it("replaces blank user string content with a placeholder", async () => {
 		const payload = await capturePayload({
-			messages: [{ role: "user", content: "   ", timestamp: Date.now() }],
+			messages: [{ role: "user", content: " ", timestamp: Date.now() }],
 		});
 		expect(payload).toBeDefined();
 		const p = payload as { messages: Array<{ role: string; content: unknown[] }> };

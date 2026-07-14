@@ -18,13 +18,23 @@ export type { MistralOptions } from "./api/mistral-conversations.ts";
 export type { OpenAICodexResponsesOptions, OpenAICodexWebSocketDebugStats } from "./api/openai-codex-responses.ts";
 export type { OpenAICompletionsOptions } from "./api/openai-completions.ts";
 export type { OpenAIResponsesOptions } from "./api/openai-responses.ts";
+export { Auth } from "./auth/auth.ts";
 export * from "./auth/context.ts";
 export * from "./auth/credential-store.ts";
 export * from "./auth/helpers.ts";
 export * from "./auth/types.ts";
+export { NativeChatCompletions } from "./codec/native-chat-completions/protocol.ts";
+export {
+	getHeader,
+	payloadSample,
+	StreamStartProviderCorrectnessViolation,
+	StreamStartProviderRejection,
+} from "./errors/failure.ts";
 export * from "./grammar/index.ts";
 export * from "./images-models.ts";
+export type { ModelSpec } from "./model/define.ts";
 export * from "./models.ts";
+export { Option3 } from "./options/option.ts";
 export * from "./providers/faux.ts";
 export * from "./session-resources.ts";
 export * from "./streaming/index.ts";
@@ -46,6 +56,7 @@ export type {
 	OAuthSelectPrompt,
 } from "./utils/oauth/types.ts";
 export * from "./utils/overflow.ts";
+export * from "./utils/retry.ts";
 export * from "./utils/retry-backoff.ts";
 export * from "./utils/token-estimate.ts";
 export * from "./utils/typebox-helpers.ts";

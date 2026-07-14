@@ -1,15 +1,15 @@
 /**
- * Pure retry-backoff delay helper. Ported from magnitude
+ * Pure retry-backoff delay helper.
  * packages/agent/src/util/retry-backoff.ts (artifact line 71036).
  *
  * Framework-agnostic: no @effect/* import.
  *
  * NOTE on pi's existing retryDelayMs in packages/ai/src/api/commandcode.ts:100:
- *   commandcode.retryDelayMs uses 20% jitter + treats Retry-After as a hard cap
- *   (returns -1 when Retry-After exceeds maxDelayMs). This module uses NO jitter
- *   and treats server hints as a FLOOR (Math.max(hint, computed)). The two
- *   variants coexist — the jittered one stays for API-page retry in commandcode;
- *   this pure variant is for future connection-level retry loops.
+ * commandcode.retryDelayMs uses 20% jitter + treats Retry-After as a hard cap
+ * (returns -1 when Retry-After exceeds maxDelayMs). This module uses NO jitter
+ * and treats server hints as a FLOOR (Math.max(hint, computed)). The two
+ * variants coexist — the jittered one stays for API-page retry in commandcode;
+ * this pure variant is for future connection-level retry loops.
  */
 
 export const MAX_RETRIES = 5;
@@ -69,7 +69,7 @@ export function isRetryExhausted(attempt: number): boolean {
  *
  * import { Schedule } from "@effect/schedule";
  * export const connectionRetrySchedule = Schedule.intersect(
- *   Schedule.recurs(MAX_RETRIES - 1),
- *   Schedule.exponential(`${BASE_DELAY_MS} millis`, 2),
- * );
+ * Schedule.recurs(MAX_RETRIES - 1),
+ * Schedule.exponential(`${BASE_DELAY_MS} millis`, 2),
+ *);
  */

@@ -1,16 +1,16 @@
 /**
  * Token-cost estimation helpers for compaction/truncation decisions.
  *
- * Port of magnitude packages/agent/src/util/turn-estimation.ts (artifact 83824).
+ * ts ().
  * Tokens approximate chars/4 to match pi's compaction.ts:224 + faux.ts:140.
  *
  * NOTE: For whole-message estimation in compaction use
- *   `compaction.ts:estimateTokens(message: AgentMessage)` (chars/4 by role).
- *   Use `estimateCompletedTurn` only when you specifically need magnitude's
- *   per-turn aggregate (assistant reasoning + tool calls + per-result detail
- *   + feedback). G22's value-add over pi's existing estimator is the
- *   **per-tool-result truncation collapse** (huge success → describeShape + 50),
- *   which pi does not have.
+ * `compaction.ts:estimateTokens(message: AgentMessage)` (chars/4 by role).
+ * Use `estimateCompletedTurn` only when you specifically need the
+ * per-turn aggregate (assistant reasoning + tool calls + per-result detail
+ * + feedback). G22's value-add over pi's existing estimator is the
+ * **per-tool-result truncation collapse** (huge success → describeShape + 50),
+ * which pi does not have.
  */
 
 /** Characters attributed to an image block in content arrays. Aligns with compaction.ts:205. */
@@ -51,7 +51,7 @@ export function renderFeedbackText(feedback: unknown): string {
 	return JSON.stringify(feedback);
 }
 
-/* ---- Tagged (verbatim magnitude) ---- */
+/* ---- Tagged (verbatim) ---- */
 
 export interface ResultTag {
 	readonly _tag: "Success" | "Error" | "Denied" | "Interrupted" | "InputRejected";
@@ -62,7 +62,7 @@ export interface ResultTag {
 }
 
 /**
- * Estimate tokens for a tagged result. Pure magnitude switch.
+ * Estimate tokens for a tagged result. Pure reference-capture switch.
  * Huge success outputs collapse to shape + 50 tokens.
  */
 export function estimateResultTokensTagged(result: ResultTag): number {
@@ -105,7 +105,7 @@ function safeStringify(value: unknown): string {
  * Estimate tokens for a result matching pi's AgentToolResult shape.
  *
  * pi's ACTUAL AgentToolResult<T> (packages/agent/src/types.ts:369) is:
- *   { content: (TextContent|ImageContent)[], details: T, terminate?: boolean }
+ * { content: (TextContent|ImageContent)[], details: T, terminate?: boolean }
  * Tools THROW on failure instead of encoding errors in the result.
  *
  * This function estimates the token cost of the content + details blocks.
@@ -129,7 +129,7 @@ export function estimateAgentToolResult(result: {
 	return Math.ceil(totalChars / 4);
 }
 
-/* ---- Completed turn (magnitude verbatim) ---- */
+/* ---- Completed turn (reference-capture verbatim) ---- */
 
 export interface CompletedTurnLike {
 	readonly assistant: {
@@ -145,7 +145,7 @@ export interface CompletedTurnLike {
  * Estimate total tokens for one completed assistant turn.
  *
  * NOTE: pi's compaction.ts:estimateTokens already covers whole-message
- * estimation. This function is for magnitude-style per-turn aggregates
+ * estimation. This function is for reference-capture-style per-turn aggregates
  * (assistant reasoning + tool calls + per-result detail + feedback).
  */
 export function estimateCompletedTurn(turn: CompletedTurnLike): number {
