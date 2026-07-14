@@ -10,7 +10,7 @@
  * which can be cheaper/faster than the main conversation model.
  *
  * Usage:
- *   pi --extension examples/extensions/custom-compaction.ts
+ * pi --extension examples/extensions/custom-compaction.ts
  */
 
 import { complete } from "@piki/ai/compat";
@@ -93,6 +93,7 @@ ${conversationText}
 				{
 					apiKey: auth.apiKey,
 					headers: auth.headers,
+					env: auth.env,
 					maxTokens: 8192,
 					signal,
 				},

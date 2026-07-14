@@ -29,7 +29,9 @@ import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { createSyntheticSourceInfo } from "../source-info.ts";
+import { time } from "../timings.ts";
 import type {
+	EntryRenderer,
 	Extension,
 	ExtensionAPI,
 	ExtensionFactory,
@@ -66,13 +68,6 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@mariozechner/pi-ai/compat": _bundledPiAiCompat,
 	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
-	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
-	"@earendil-works/pi-tui": _bundledPiTui,
-	"@earendil-works/pi-ai": _bundledPiAiCompat,
-	"@earendil-works/pi-ai/base": _bundledPiAiCompatAsBase,
-	"@earendil-works/pi-ai/compat": _bundledPiAiCompat,
-	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
-	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
 };
 
 const require = createRequire(import.meta.url);
@@ -126,13 +121,6 @@ function getAliases(): Record<string, string> {
 		"@mariozechner/pi-ai/base": piAiCompatEntry,
 		"@mariozechner/pi-ai/compat": piAiCompatEntry,
 		"@mariozechner/pi-ai/oauth": piAiOauthEntry,
-		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
-		"@earendil-works/pi-agent-core": piAgentCoreEntry,
-		"@earendil-works/pi-tui": piTuiEntry,
-		"@earendil-works/pi-ai": piAiCompatEntry,
-		"@earendil-works/pi-ai/base": piAiCompatEntry,
-		"@earendil-works/pi-ai/compat": piAiCompatEntry,
-		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		typebox: typeboxEntry,
 		"typebox/compile": typeboxCompileEntry,
 		"typebox/value": typeboxValueEntry,
@@ -287,6 +275,12 @@ function createExtensionAPI(
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 
+		registerEntryRenderer<T>(customType: string, renderer: EntryRenderer<T>): void {
+			runtime.assertActive();
+			extension.entryRenderers ??= new Map();
+			extension.entryRenderers.set(customType, renderer as EntryRenderer);
+		},
+
 		// Flag access - checks extension registered it, reads from runtime
 		getFlag(name: string): boolean | string | undefined {
 			runtime.assertActive();
@@ -433,6 +427,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		handlers: new Map(),
 		tools: new Map(),
 		messageRenderers: new Map(),
+		entryRenderers: new Map(),
 		commands: new Map(),
 		flags: new Map(),
 		shortcuts: new Map(),
@@ -450,6 +445,7 @@ async function loadExtension(
 
 	try {
 		const factory = await loadExtensionModule(resolvedPath, cacheToken);
+		time(`${extensionPath} module import`, "extensions");
 		if (!factory) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
 		}
@@ -457,6 +453,7 @@ async function loadExtension(
 		const extension = createExtension(extensionPath, resolvedPath);
 		const api = createExtensionAPI(extension, runtime, cwd, eventBus);
 		await factory(api);
+		time(`${extensionPath} factory`, "extensions");
 
 		return { extension, error: null };
 	} catch (err) {
@@ -479,6 +476,7 @@ export async function loadExtensionFromFactory(
 	const resolvedCwd = resolvePath(cwd);
 	const api = createExtensionAPI(extension, runtime, resolvedCwd, eventBus);
 	await factory(api);
+	time(`${extensionPath} factory`, "extensions");
 	return extension;
 }
 

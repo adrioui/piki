@@ -5,9 +5,9 @@
  * giving it an isolated context window.
  *
  * Supports three modes:
- *   - Single: { agent: "name", task: "..." }
- *   - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
- *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
+ * - Single: { agent: "name", task: "..." }
+ * - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
+ * - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
  *
  * Uses JSON mode to capture structured output from subagents.
  */
@@ -710,13 +710,13 @@ export default function (pi: ExtensionAPI) {
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
-						"\n  " +
+						"\n " +
 						theme.fg("muted", `${i + 1}.`) +
 						" " +
 						theme.fg("accent", step.agent) +
 						theme.fg("dim", ` ${preview}`);
 				}
-				if (args.chain.length > 3) text += `\n  ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
+				if (args.chain.length > 3) text += `\n ${theme.fg("muted", `... +${args.chain.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			if (args.tasks && args.tasks.length > 0) {
@@ -726,9 +726,9 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (const t of args.tasks.slice(0, 3)) {
 					const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
-					text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+					text += `\n ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
 				}
-				if (args.tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+				if (args.tasks.length > 3) text += `\n ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
 				return new Text(text, 0, 0);
 			}
 			const agentName = args.agent || "...";
@@ -737,7 +737,7 @@ export default function (pi: ExtensionAPI) {
 				theme.fg("toolTitle", theme.bold("subagent ")) +
 				theme.fg("accent", agentName) +
 				theme.fg("muted", ` [${scope}]`);
-			text += `\n  ${theme.fg("dim", preview)}`;
+			text += `\n ${theme.fg("dim", preview)}`;
 			return new Text(text, 0, 0);
 		},
 
