@@ -23,7 +23,7 @@ describe("WorkerBus", () => {
 					yield* bus.publish(sampleEvent("agent_created", 1));
 					yield* bus.publish(sampleEvent("agent_finished", 2));
 
-					const collected = yield* Stream.runCollect(Stream.take(stream, 2));
+					const collected = Array.from(yield* Stream.runCollect(Stream.take(stream, 2)));
 					expect(collected.length).toBe(2);
 					expect(collected[0].type).toBe("agent_created");
 					expect(collected[1].type).toBe("agent_finished");
@@ -48,7 +48,7 @@ describe("WorkerBus", () => {
 					const filtered = yield* bus.subscribeToTypes(["worker_killed"]);
 					yield* bus.publish(sampleEvent("agent_created", 1)); // filtered OUT
 					yield* bus.publish(sampleEvent("worker_killed", 2)); // passes
-					const collected = yield* Stream.runCollect(Stream.take(filtered, 1));
+					const collected = Array.from(yield* Stream.runCollect(Stream.take(filtered, 1)));
 					expect(collected.length).toBe(1);
 					expect(collected[0].type).toBe("worker_killed");
 				}),
@@ -83,7 +83,7 @@ describe("WorkerBus", () => {
 					const stream = yield* bus.subscribe();
 					yield* bus.publish(sampleEvent("fork_created", 1));
 					yield* bus.publish(sampleEvent("fork_cleaned", 2));
-					const collected = yield* Stream.runCollect(Stream.take(stream, 2));
+					const collected = Array.from(yield* Stream.runCollect(Stream.take(stream, 2)));
 					expect(collected.length).toBe(2);
 					expect(collected[0].type).toBe("fork_created");
 					expect(collected[1].type).toBe("fork_cleaned");

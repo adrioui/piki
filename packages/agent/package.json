@@ -34,7 +34,7 @@
 	},
 	"dependencies": {
 		"@piki/ai": "^0.80.2",
-		"effect": "4.0.0-beta.93",
+		"effect": "3.21.4",
 		"ignore": "7.0.5",
 		"typebox": "1.1.38",
 		"yaml": "2.9.0"

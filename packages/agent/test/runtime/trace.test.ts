@@ -45,7 +45,7 @@ describe("Trace", () => {
 
 	it("custom Trace listener collects emitted events", async () => {
 		const events: TraceEvent[] = [];
-		const customLayer: Layer.Layer<Trace, never, never> = Layer.succeed(Trace, {
+		const customLayer = Layer.succeed(Trace, {
 			onEvent: (event: TraceEvent) =>
 				Effect.sync(() => {
 					events.push(event);

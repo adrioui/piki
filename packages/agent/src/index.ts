@@ -28,7 +28,9 @@ export {
 export * from "./harness/messages.ts";
 export * from "./harness/prompt-templates.ts";
 export * from "./harness/session/jsonl-repo.ts";
+export * from "./harness/session/jsonl-storage.ts";
 export * from "./harness/session/memory-repo.ts";
+export * from "./harness/session/memory-storage.ts";
 export * from "./harness/session/repo-utils.ts";
 export * from "./harness/session/session.ts";
 export { uuidv7 } from "./harness/session/uuid.ts";
@@ -46,5 +48,7 @@ export * from "./projections/worker-activity.ts";
 export * from "./proxy.ts";
 // Roles
 export * from "./roles/task-worker-role.ts";
+// Truncation
+export { renderXmlBodyValue } from "./truncation/xml-body.ts";
 // Types
 export * from "./types.ts";

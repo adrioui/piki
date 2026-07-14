@@ -45,11 +45,11 @@ interface AgentStatusLike {
 	agents: Map<string, AgentEntry>;
 }
 
-// ─── Magnitude-copied helpers ───────────────────────────────────────────────
+// ─── Task-tree helpers ───────────────────────────────────────────────────────────
 
 /**
  * DFS walk over the task tree, producing an ordered list of task IDs and
- * per-task depth. Copied from Magnitude `flattenTaskTree` (lines 82647-82667).
+ * per-task depth. Computes the flattened task tree (lines 82647-82667).
  *
  * Adapted: pi's Task uses `children` (not `childIds`) and roots are found by
  * filtering tasks with no `rootTaskIds` array; instead we check `parentId`.
@@ -71,7 +71,7 @@ export function flattenTaskTree(taskGraph: TaskGraphLike): {
 		}
 	};
 
-	// Use rootTaskIds if available (magnitude pattern), otherwise derive from parentId
+	// Use rootTaskIds if available (standard pattern), otherwise derive from parentId
 	if ("rootTaskIds" in taskGraph && Array.isArray(taskGraph.rootTaskIds)) {
 		for (const rootId of taskGraph.rootTaskIds) {
 			visit(rootId, 0);
@@ -89,10 +89,10 @@ export function flattenTaskTree(taskGraph: TaskGraphLike): {
 
 /**
  * Derive the assignee descriptor for a task snapshot.
- * Copied from Magnitude `deriveTaskWorkerAssignee` (lines 82733-82744).
+ * Computes the task worker assignee (lines 82733-82744).
  *
  * Adapted for pi: pi's Task has `assignee: string | null` instead of
- * magnitude's `worker` object. We look up the agent in AgentStatus to
+ * the `worker` object. We look up the agent in AgentStatus to
  * determine the role.
  */
 export function deriveTaskWorkerAssignee(task: TaskEntry, agentState: AgentStatusLike): TaskWorkerSnapshot["assignee"] {
@@ -126,7 +126,7 @@ export function deriveTaskWorkerAssignee(task: TaskEntry, agentState: AgentStatu
 
 /**
  * Derive the worker-state kind for a single task.
- * Copied from Magnitude `deriveWorkerState` (lines 82696-82730).
+ * Computes the per-task worker state (lines 82696-82730).
  *
  * SIMPLIFIED: pi lacks HarnessState / tool-handle tracking, so we skip
  * the `spawning` and `killing` detection (findActiveToolCallId). Only the
@@ -140,7 +140,7 @@ export function deriveWorkerState(args: {
 }): TaskWorkerStatus {
 	const { task, agentState, activityByForkId } = args;
 
-	// Determine the worker identifier (forkId from magnitude's worker object, or assignee in pi)
+	// Determine the worker identifier (forkId from the worker object, or assignee in pi)
 	const workerForkId = task.worker?.forkId ?? task.assignee ?? null;
 	const workerAgentId = task.worker?.agentId ?? task.assignee ?? null;
 
@@ -169,7 +169,7 @@ export function deriveWorkerState(args: {
 
 /**
  * Recompute the full set of per-task snapshots.
- * Copied from Magnitude `recomputeState` (lines 82766-82795).
+ * Recomputes the aggregate worker state (lines 82766-82795).
  */
 export function recomputeState(args: {
 	taskGraph: TaskGraphLike;

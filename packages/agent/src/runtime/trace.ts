@@ -33,7 +33,7 @@ export interface TraceShape {
 	readonly onEvent: (event: TraceEvent) => Effect.Effect<void>;
 }
 
-export class Trace extends Context.Service<Trace, TraceShape>()("Trace") {}
+export const Trace = Context.GenericTag<TraceShape>("Trace");
 
 /** No-op layer — default when no listeners registered. Never fails. */
 export const TraceNoop = Layer.succeed(Trace, {

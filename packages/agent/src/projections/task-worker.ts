@@ -15,7 +15,7 @@ export interface WorkerActivityEntry {
 	resumeCount: number;
 }
 
-/** Pure per-task worker-state kind (same vocabulary as Magnitude deriveWorkerState). */
+/** Per-task worker-state kind. */
 export type TaskWorkerStatus = "spawning" | "killing" | "working" | "idle" | "unassigned";
 
 export interface TaskWorkerSnapshot {

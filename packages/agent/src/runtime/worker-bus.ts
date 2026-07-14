@@ -26,7 +26,7 @@ export interface WorkerBusShape {
 	) => Effect.Effect<Stream.Stream<WorkerBusEvent>, unknown, Scope.Scope>;
 }
 
-export class WorkerBus extends Context.Service<WorkerBus, WorkerBusShape>()("WorkerBus") {}
+export const WorkerBus = Context.GenericTag<WorkerBusShape>("WorkerBus");
 
 /**
  * Live layer factory. Takes a `publishFn` (typically EventSink.publish) and
@@ -37,12 +37,13 @@ export class WorkerBus extends Context.Service<WorkerBus, WorkerBusShape>()("Wor
  * so no Scope is required in the layer's environment.
  *
  * `subscribe()` / `subscribeToTypes()` use `PubSub.subscribe` (eager) +
- * `Stream.fromSubscription` so that events published AFTER subscribing are
- * captured — `Stream.fromPubSub` is lazy and would miss them.
+ * `Stream.fromQueue` so that events published AFTER subscribing are
+ * captured — `Stream.fromPubSub` is eager too but subscribe gives the caller
+ * a dedicated queue with scoped lifetime.
  */
 export function makeWorkerBusLayer(
 	publishFn: (event: WorkerBusEvent) => Promise<void>,
-): Layer.Layer<WorkerBus, never, never> {
+): Layer.Layer<WorkerBusShape, never, never> {
 	return Layer.effect(
 		WorkerBus,
 		Effect.gen(function* () {
@@ -57,18 +58,13 @@ export function makeWorkerBusLayer(
 						});
 					}).pipe(Effect.asVoid),
 				stream: Stream.fromPubSub(pubsub),
-				subscribe: () =>
-					Effect.gen(function* () {
-						const sub = yield* PubSub.subscribe(pubsub);
-						return Stream.fromSubscription(sub);
-					}),
+				subscribe: () => Effect.map(PubSub.subscribe(pubsub), Stream.fromQueue),
 				subscribeToTypes: (types: readonly WorkerBusEventType[]) =>
-					Effect.gen(function* () {
-						const sub = yield* PubSub.subscribe(pubsub);
-						return Stream.fromSubscription(sub).pipe(
+					Effect.map(PubSub.subscribe(pubsub), (queue) =>
+						Stream.fromQueue(queue).pipe(
 							Stream.filter((event) => types.includes(event.type as WorkerBusEventType)),
-						);
-					}),
+						),
+					),
 			};
 		}),
 	);
