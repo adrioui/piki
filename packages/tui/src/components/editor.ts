@@ -19,10 +19,10 @@ const graphemeSegmenter = getGraphemeSegmenter();
 const wordSegmenter = getWordSegmenter();
 
 /** Regex matching paste markers like `[paste #1 +123 lines]` or `[paste #2 1234 chars]`. */
-const PASTE_MARKER_REGEX = /\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]/g;
+const PASTE_MARKER_REGEX = /\[paste #(\d+)((\+\d+ lines|\d+ chars))?\]/g;
 
 /** Non-global version for single-segment testing. */
-const PASTE_MARKER_SINGLE = /^\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]$/;
+const PASTE_MARKER_SINGLE = /^\[paste #(\d+)((\+\d+ lines|\d+ chars))?\]$/;
 
 /** Check if a segment is a paste marker (i.e. was merged by segmentWithMarkers). */
 function isPasteMarker(segment: string): boolean {
@@ -31,7 +31,7 @@ function isPasteMarker(segment: string): boolean {
 
 /**
  * A segmenter that wraps Intl.Segmenter and merges graphemes that fall
- * within paste markers into single atomic segments.  This makes cursor
+ * within paste markers into single atomic segments. This makes cursor
  * movement, deletion, word-wrap, etc. treat paste markers as single units.
  *
  * Only markers whose numeric ID exists in `validIds` are merged.
@@ -108,7 +108,7 @@ export interface TextChunk {
  * @param line - The text line to wrap
  * @param maxWidth - Maximum visible width per chunk
  * @param preSegmented - Optional pre-segmented graphemes (e.g. with paste-marker awareness).
- *                       When omitted the default Intl.Segmenter is used.
+ * When omitted the default Intl.Segmenter is used.
  * @returns Array of chunks with text and position information
  */
 export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl.SegmentData[]): TextChunk[] {
@@ -973,7 +973,7 @@ export class Editor implements Component, Focusable {
 	private expandPasteMarkers(text: string): string {
 		let result = text;
 		for (const [pasteId, pasteContent] of this.pastes) {
-			const markerRegex = new RegExp(`\\[paste #${pasteId}( (\\+\\d+ lines|\\d+ chars))?\\]`, "g");
+			const markerRegex = new RegExp(`\\[paste #${pasteId}((\\+\\d+ lines|\\d+ chars))?\\]`, "g");
 			result = result.replace(markerRegex, () => pasteContent);
 		}
 		return result;
@@ -999,6 +999,8 @@ export class Editor implements Component, Focusable {
 		this.cancelAutocomplete();
 		this.lastAction = null;
 		this.exitHistoryBrowsing();
+		this.pastes.clear();
+		this.pasteCounter = 0;
 		const normalized = this.normalizeText(text);
 		// Push undo snapshot if content differs (makes programmatic changes undoable)
 		if (this.getText() !== normalized) {
@@ -1027,7 +1029,7 @@ export class Editor implements Component, Focusable {
 	 * - Expand tabs to 4 spaces
 	 */
 	private normalizeText(text: string): string {
-		return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, "    ");
+		return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\t/g, " ");
 	}
 
 	/**
@@ -1267,13 +1269,37 @@ export class Editor implements Component, Focusable {
 			this.pushUndoSnapshot();
 
 			// Delete grapheme before cursor (handles emojis, combining characters, etc.)
-			const line = this.state.lines[this.state.cursorLine] || "";
+			let line = this.state.lines[this.state.cursorLine] || "";
 			const beforeCursor = line.slice(0, this.state.cursorCol);
 
 			// Find the last grapheme in the text before cursor
 			const graphemes = [...this.segment(beforeCursor, "grapheme")];
 			const lastGrapheme = graphemes[graphemes.length - 1];
 			const graphemeLength = lastGrapheme ? lastGrapheme.segment.length : 1;
+			const isPastedSegmented = PASTE_MARKER_SINGLE.exec(lastGrapheme.segment);
+
+			if (isPastedSegmented) {
+				// This contains the id part e.g 4 from [paste #4 +123 lines]
+				const targetId = Number(isPastedSegmented[1]);
+				this.pastes.delete(targetId);
+				this.pasteCounter--;
+
+				// We got to update id of markers which are greater than the removed one
+				this.state.lines = this.state.lines.map((line) =>
+					line.replace(PASTE_MARKER_REGEX, (fullMatch, idGroup, suffixGroup) => {
+						const x = Number(idGroup);
+						if (x <= targetId) return fullMatch;
+
+						// [paste #3] become [paste #2] if we remove [paste #1]
+						const newText = `[paste #${x - 1}${suffixGroup}]`;
+						this.pastes.set(x - 1, this.pastes.get(x) ?? newText);
+						this.pastes.delete(x);
+						return newText;
+					}),
+				);
+			}
+
+			line = this.state.lines[this.state.cursorLine] || "";
 
 			const before = line.slice(0, this.state.cursorCol - graphemeLength);
 			const after = line.slice(this.state.cursorCol);
@@ -1416,15 +1442,15 @@ export class Editor implements Component, Focusable {
 	 * Compute the target visual column for vertical cursor movement.
 	 * Implements the sticky column decision table:
 	 *
-	 * | P | S | T | U | Scenario                                             | Set Preferred | Move To     |
+	 * | P | S | T | U | Scenario | Set Preferred | Move To |
 	 * |---|---|---|---| ---------------------------------------------------- |---------------|-------------|
-	 * | 0 | * | 0 | - | Start nav, target fits                               | null          | current     |
-	 * | 0 | * | 1 | - | Start nav, target shorter                            | current       | target end  |
-	 * | 1 | 0 | 0 | 0 | Clamped, target fits preferred                       | null          | preferred   |
-	 * | 1 | 0 | 0 | 1 | Clamped, target longer but still can't fit preferred | keep          | target end  |
-	 * | 1 | 0 | 1 | - | Clamped, target even shorter                         | keep          | target end  |
-	 * | 1 | 1 | 0 | - | Rewrapped, target fits current                       | null          | current     |
-	 * | 1 | 1 | 1 | - | Rewrapped, target shorter than current               | current       | target end  |
+	 * | 0 | * | 0 | - | Start nav, target fits | null | current |
+	 * | 0 | * | 1 | - | Start nav, target shorter | current | target end |
+	 * | 1 | 0 | 0 | 0 | Clamped, target fits preferred | null | preferred |
+	 * | 1 | 0 | 0 | 1 | Clamped, target longer but still can't fit preferred | keep | target end |
+	 * | 1 | 0 | 1 | - | Clamped, target even shorter | keep | target end |
+	 * | 1 | 1 | 0 | - | Rewrapped, target fits current | null | current |
+	 * | 1 | 1 | 1 | - | Rewrapped, target shorter than current | current | target end |
 	 *
 	 * Where:
 	 * - P = preferred col is set

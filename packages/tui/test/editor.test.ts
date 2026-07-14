@@ -153,7 +153,7 @@ describe("Editor component", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 
 			editor.addToHistory("");
-			editor.addToHistory("   ");
+			editor.addToHistory(" ");
 			editor.addToHistory("valid");
 
 			editor.handleInput("\x1b[A");
@@ -527,7 +527,7 @@ describe("Editor component", () => {
 			assert.strictEqual(editor.getText(), "foo bar ");
 
 			// Trailing whitespace
-			editor.setText("foo bar   ");
+			editor.setText("foo bar ");
 			editor.handleInput("\x17");
 			assert.strictEqual(editor.getText(), "foo ");
 
@@ -599,7 +599,7 @@ describe("Editor component", () => {
 			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 14 }); // end of line
 
 			// Test forward from start with leading whitespace
-			editor.setText("   foo bar");
+			editor.setText(" foo bar");
 			editor.handleInput("\x01"); // Ctrl+A to go to start
 			editor.handleInput("\x1b[1;5C"); // Ctrl+Right
 			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 6 }); // after 'foo'
@@ -894,12 +894,12 @@ describe("Editor component", () => {
 			const editor = new Editor(createTestTUI(), defaultEditorTheme);
 			const width = 50;
 
-			editor.setText("Word1   Word2    Word3");
+			editor.setText("Word1 Word2 Word3");
 			const lines = editor.render(width);
 
 			const contentLine = stripVTControlCharacters(lines[1]!).trim();
 			// Multiple spaces should be preserved
-			assert.ok(contentLine.includes("Word1   Word2"), "Multiple spaces should be preserved");
+			assert.ok(contentLine.includes("Word1 Word2"), "Multiple spaces should be preserved");
 		});
 
 		it("handles empty string", () => {
@@ -955,63 +955,63 @@ describe("Editor component", () => {
 		});
 
 		it("wraps word to next line when it fits width but not remaining space", () => {
-			const chunks = wordWrapLine("      aaaaaaaaaaaa", 12);
+			const chunks = wordWrapLine(" aaaaaaaaaaaa", 12);
 
 			assert.strictEqual(chunks.length, 2);
-			assert.strictEqual(chunks[0]!.text, "      ");
+			assert.strictEqual(chunks[0]!.text, " ");
 			assert.strictEqual(chunks[1]!.text, "aaaaaaaaaaaa");
 		});
 
 		it("keeps word with multi-space and following word together when they fit", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,    consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 2);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,    consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet, consectetur");
 		});
 
 		it("keeps word with multi-space and following word when they fill width exactly", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,              consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 2);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,              consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet, consectetur");
 		});
 
 		it("splits when word plus multi-space plus word exceeds width", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,               consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,               ");
+			assert.strictEqual(chunks[1]!.text, "amet, ");
 			assert.strictEqual(chunks[2]!.text, "consectetur");
 		});
 
 		it("breaks long whitespace at line boundary", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                         consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,                         ");
+			assert.strictEqual(chunks[1]!.text, "amet, ");
 			assert.strictEqual(chunks[2]!.text, "consectetur");
 		});
 
 		it("breaks long whitespace at line boundary 2", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                          consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,                         ");
+			assert.strictEqual(chunks[1]!.text, "amet, ");
 			assert.strictEqual(chunks[2]!.text, " consectetur");
 		});
 
 		it("breaks whitespace spanning full lines", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                                     consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet,                         ");
-			assert.strictEqual(chunks[2]!.text, "            consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet, ");
+			assert.strictEqual(chunks[2]!.text, " consectetur");
 		});
 
 		it("force-breaks when wide char after word boundary wrap still overflows", () => {
@@ -1595,7 +1595,7 @@ describe("Editor component", () => {
 			editor.handleInput("o");
 			editor.handleInput(" ");
 			editor.handleInput(" ");
-			assert.strictEqual(editor.getText(), "hello  ");
+			assert.strictEqual(editor.getText(), "hello ");
 
 			editor.handleInput("\x1b[45;5u"); // Ctrl+- (undo) - removes second " "
 			assert.strictEqual(editor.getText(), "hello ");
@@ -3859,7 +3859,7 @@ describe("Editor component", () => {
 			// Line 0: "12345678901234567890"
 			// Line 1: "" (empty)
 			// Line 2: "hello [paste #1 2000 chars]"
-			//         marker starts at col 6
+			// marker starts at col 6
 
 			// Navigate to line 0, col 10
 			editor.handleInput("\x1b[A"); // Up to line 1
@@ -3931,10 +3931,10 @@ describe("Editor component", () => {
 			// Marker "[paste #1 +100 lines]" (21 chars) is wider than the
 			// terminal (20). Word-wrap splits at the space before "lines",
 			// producing:
-			//   VL1: abcdefgh              (startCol 0,  len 8)
-			//   VL2: [paste #1 +100        (startCol 8,  len 15) <- marker head
-			//   VL3: lines]ijklmnopqr      (startCol 23, len 16) <- marker tail + content
-			//   VL4: 123456789012345678    (line 1)
+			// VL1: abcdefgh (startCol 0, len 8)
+			// VL2: [paste #1 +100 (startCol 8, len 15) <- marker head
+			// VL3: lines]ijklmnopqr (startCol 23, len 16) <- marker tail + content
+			// VL4: 123456789012345678 (line 1)
 			//
 			// On VL3 the marker tail "lines]" occupies visual cols 0-5.
 			// Content ("i") starts at visual col 6 = logical col 29.
@@ -3989,10 +3989,10 @@ describe("Editor component", () => {
 			// visual col 3 which is inside the "lines]" marker tail.
 			// moveToVisualLine detects the continuation VL and skips to VL4
 			// (line 1).
-			//   VL1: abcdefgh              (startCol 0,  len 8)
-			//   VL2: [paste #1 +100        (startCol 8,  len 15) <- marker head
-			//   VL3: lines]ijklmnopqr      (startCol 23, len 16) <- marker tail + content
-			//   VL4: 123456789012345678    (line 1)
+			// VL1: abcdefgh (startCol 0, len 8)
+			// VL2: [paste #1 +100 (startCol 8, len 15) <- marker head
+			// VL3: lines]ijklmnopqr (startCol 23, len 16) <- marker tail + content
+			// VL4: 123456789012345678 (line 1)
 			for (const ch of "abcdefgh") editor.handleInput(ch);
 			const bigContent = "line\n".repeat(100).trimEnd();
 			editor.handleInput(`\x1b[200~${bigContent}\x1b[201~`);
