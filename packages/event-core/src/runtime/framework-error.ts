@@ -58,9 +58,7 @@ export interface FrameworkErrorPubSubShape {
 	readonly subscribe: () => Effect.Effect<Stream.Stream<FrameworkError>>;
 }
 
-export class FrameworkErrorPubSub extends Context.Service<FrameworkErrorPubSub, FrameworkErrorPubSubShape>()(
-	"FrameworkErrorPubSub",
-) {}
+export const FrameworkErrorPubSub = Context.GenericTag<FrameworkErrorPubSubShape>("@piki/FrameworkErrorPubSub");
 
 /**
  * Live PubSub layer. `PubSub.unbounded` in effect@4.0.0-beta.93 returns
@@ -86,9 +84,7 @@ export interface FrameworkErrorReporterShape {
 	readonly report: (error: FrameworkError) => Effect.Effect<void>;
 }
 
-export class FrameworkErrorReporter extends Context.Service<FrameworkErrorReporter, FrameworkErrorReporterShape>()(
-	"FrameworkErrorReporter",
-) {}
+export const FrameworkErrorReporter = Context.GenericTag<FrameworkErrorReporterShape>("@piki/FrameworkErrorReporter");
 
 export const FrameworkErrorReporterLive = Layer.effect(
 	FrameworkErrorReporter,
@@ -97,7 +93,7 @@ export const FrameworkErrorReporterLive = Layer.effect(
 		return {
 			report: (error: FrameworkError) =>
 				PubSub.publish(bus.pubsub, error).pipe(
-					Effect.catchCause(() => Effect.void),
+					Effect.catchAllCause(() => Effect.void),
 					Effect.asVoid,
 				),
 		};

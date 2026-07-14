@@ -3,14 +3,14 @@ import type { Effect } from "effect";
 
 /**
  * An ambient definition: a name plus an (optionally Effect) initial value.
- * Mirrors magnitude's ambient/define (typed; no untyped `_type` sentinel).
+ * Typed; no untyped sentinel field.
  */
 export interface AmbDef<T = unknown> {
 	readonly name: string;
 	readonly initial: T | Effect.Effect<T>;
 }
 
-/** Factory mirroring magnitude's `define`. */
+/** Factory for ambient definitions. */
 export function defineAmbient<T>(options: {
 	readonly name: string;
 	readonly initial: T | Effect.Effect<T>;

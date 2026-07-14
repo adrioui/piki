@@ -2,11 +2,7 @@
 // G18: ProjectionBus — signal-queue flush, ambient dispatch, cycle validation.
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-	FrameworkErrorPubSubLive,
-	type FrameworkErrorReporter,
-	FrameworkErrorReporterLive,
-} from "../../src/runtime/framework-error.ts";
+import { FrameworkErrorPubSubLive, FrameworkErrorReporterLive } from "../../src/runtime/framework-error.ts";
 import { ProjectionBus, ProjectionBusLive } from "../../src/runtime/projection-bus.ts";
 
 // ---------------------------------------------------------------------------
@@ -18,8 +14,8 @@ const frameworkErrorLayer = FrameworkErrorReporterLive.pipe(Layer.provideMerge(F
 const testLayer = ProjectionBusLive.pipe(Layer.provideMerge(frameworkErrorLayer));
 
 /** Convenience: run an effect against the test layer and return the result. */
-function run<T>(effect: Effect.Effect<T, never, ProjectionBus | FrameworkErrorReporter>): Promise<T> {
-	return Effect.runPromise(Effect.provide(effect, testLayer));
+function run<T>(effect: Effect.Effect<T, any, any>): Promise<T> {
+	return Effect.runPromise(Effect.provide(effect, testLayer) as Effect.Effect<T, never, never>);
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +109,7 @@ describe("ProjectionBus", () => {
 				yield* bus.registerDependency("B", "A");
 
 				// validateNoCycles should die via Effect.die with ProjectionBusCycleError
-				const caught = yield* Effect.catchCause(bus.validateNoCycles(), (cause) => Effect.succeed(cause));
+				const caught = yield* Effect.catchAllCause(bus.validateNoCycles(), (cause) => Effect.succeed(cause));
 
 				// We caught the cause — verify it's present (bus died as expected)
 				expect(caught).toBeDefined();

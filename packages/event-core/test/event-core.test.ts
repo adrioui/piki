@@ -10,7 +10,6 @@ import {
 	createFileMentionResolverWorker,
 	createForkProjection,
 	createGoalProjection,
-	createSignal,
 	createTaskGraphProjection,
 	createUsageProjection,
 	DefaultEventSink,
@@ -19,6 +18,7 @@ import {
 	RoleHost,
 } from "../src/index.ts";
 import type { EventEnvelope } from "../src/types.ts";
+import { createSignal as createSignalDefinition } from "../src/types.ts";
 
 type TestEvent = EventEnvelope<"counted" | "mirrored", { value: number }>;
 type RuntimeEvent = EventEnvelope<string, Record<string, unknown>>;
@@ -581,7 +581,7 @@ describe("event-core", () => {
 	});
 
 	it("createSignal produces typed signal definitions", () => {
-		const sig = createSignal("Test/mySignal", "A test signal");
+		const sig = createSignalDefinition("Test/mySignal", "A test signal");
 		expect(sig.type).toBe("Test/mySignal");
 		expect(sig.description).toBe("A test signal");
 	});

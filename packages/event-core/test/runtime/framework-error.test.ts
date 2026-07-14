@@ -1,4 +1,4 @@
-import { Effect, Layer, PubSub } from "effect";
+import { Effect, Layer, PubSub, Queue } from "effect";
 import { describe, expect, it } from "vitest";
 import {
 	FrameworkErrorPubSub,
@@ -27,7 +27,7 @@ describe("FrameworkError", () => {
 					const sub = yield* PubSub.subscribe(bus.pubsub);
 					const reporter = yield* FrameworkErrorReporter;
 					yield* reporter.report(new RoleError({ roleId: "r1", message: "first" }));
-					const taken = yield* PubSub.take(sub);
+					const taken = yield* Queue.take(sub);
 					expect(taken._tag).toBe("RoleError");
 					expect((taken as RoleError).roleId).toBe("r1");
 				}),

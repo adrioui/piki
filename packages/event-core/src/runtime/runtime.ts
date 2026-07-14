@@ -2,19 +2,19 @@ import { Layer, ManagedRuntime } from "effect";
 import type { ProjectionStore } from "../projection.ts";
 import type { RoleHost } from "../role.ts";
 import type { DefaultEventSink } from "../sink.ts";
-import { type Ambient, AmbientLive } from "./ambient-service.ts";
-import { type EventSinkTag, makeEventSinkLayer } from "./event-sink-tag.ts";
+import { AmbientLive, type AmbientShape } from "./ambient-service.ts";
+import { type EventSinkTagShape, makeEventSinkLayer } from "./event-sink-tag.ts";
 import {
-	type FrameworkErrorPubSub,
 	FrameworkErrorPubSubLive,
-	type FrameworkErrorReporter,
+	type FrameworkErrorPubSubShape,
 	FrameworkErrorReporterLive,
+	type FrameworkErrorReporterShape,
 } from "./framework-error.ts";
-import { type HydrationContext, HydrationContextLive } from "./hydration-context.ts";
-import { type ProjectionBus, ProjectionBusLive } from "./projection-bus.ts";
-import { makeProjectionStoreLayer, type ProjectionStoreTag } from "./projection-store-tag.ts";
-import { makeRoleHostLayer, type RoleHostTag } from "./role-host-tag.ts";
-import { type TraceBus, TraceBusLive } from "./trace-bus.ts";
+import { HydrationContextLive, type HydrationContextShape } from "./hydration-context.ts";
+import { ProjectionBusLive, type ProjectionBusShape } from "./projection-bus.ts";
+import { makeProjectionStoreLayer, type ProjectionStoreTagShape } from "./projection-store-tag.ts";
+import { makeRoleHostLayer, type RoleHostTagShape } from "./role-host-tag.ts";
+import { TraceBusLive, type TraceBusShape } from "./trace-bus.ts";
 
 // ---------------------------------------------------------------------------
 // Foundation deps — concrete instances the caller must provide
@@ -31,15 +31,15 @@ export interface FoundationDeps {
 // ---------------------------------------------------------------------------
 
 export type FoundationRequirements =
-	| Ambient
-	| HydrationContext
-	| FrameworkErrorPubSub
-	| FrameworkErrorReporter
-	| TraceBus
-	| ProjectionBus
-	| EventSinkTag
-	| ProjectionStoreTag
-	| RoleHostTag;
+	| AmbientShape
+	| EventSinkTagShape
+	| FrameworkErrorPubSubShape
+	| FrameworkErrorReporterShape
+	| TraceBusShape
+	| ProjectionBusShape
+	| ProjectionStoreTagShape
+	| RoleHostTagShape
+	| HydrationContextShape;
 
 // ---------------------------------------------------------------------------
 // Layer composition

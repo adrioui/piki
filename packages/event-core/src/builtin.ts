@@ -19,7 +19,7 @@ export const GoalSignals = {
 };
 
 /**
- * Goal projection — mirrors Magnitude's GoalProjection.
+ * Goal projection.
  *
  * Goal lifecycle: injection → started → finished/incomplete
  *
@@ -163,7 +163,7 @@ export function isTaskStatus(value: unknown): value is TaskStatus {
 }
 
 /**
- * TaskGraph projection — mirrors Magnitude's TaskGraphProjection.
+ * TaskGraph projection — tracks the task tree and per-task state.
  *
  * Manages parent-child task relationships with completion rules:
  * - Children must complete before parent
@@ -310,7 +310,7 @@ export interface CheckpointState {
 /**
  * Checkpoint projection — tracks turn-boundary checkpoints.
  *
- * Mirrors Magnitude's checkpoint system that records work at each turn
+ * Checkpoint system that records work at each turn
  * boundary. Events:
  * - `checkpoint.created` → add a checkpoint entry
  * - `checkpoint.rolled_back` → truncate checkpoint list and update redo stack

@@ -5,8 +5,8 @@ export interface EventSinkTagShape {
 	readonly sink: DefaultEventSink;
 }
 
-export class EventSinkTag extends Context.Service<EventSinkTag, EventSinkTagShape>()("EventSinkTag") {}
+export const EventSinkTag = Context.GenericTag<EventSinkTagShape>("EventSinkTag");
 
-export function makeEventSinkLayer(sink: DefaultEventSink): Layer.Layer<EventSinkTag, never, never> {
+export function makeEventSinkLayer(sink: DefaultEventSink) {
 	return Layer.succeed(EventSinkTag, { sink });
 }

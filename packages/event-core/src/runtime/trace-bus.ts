@@ -1,5 +1,5 @@
 // packages/event-core/src/runtime/trace-bus.ts
-import { Context, Effect, Layer, PubSub, type Scope } from "effect";
+import { Context, Effect, Layer, PubSub, type Queue, type Scope } from "effect";
 
 /**
  * TraceEvent shape — re-declared here to avoid a cross-package type import
@@ -17,10 +17,10 @@ export interface TraceBusShape {
 	/** Emit a trace event to all subscribers. Never fails — subscriber errors are swallowed. */
 	readonly emit: (event: TraceEvent) => Effect.Effect<void>;
 	/** Subscribe to the full stream of trace events. */
-	readonly subscribe: () => Effect.Effect<PubSub.Subscription<TraceEvent>, never, Scope.Scope>;
+	readonly subscribe: () => Effect.Effect<Queue.Dequeue<TraceEvent>, never, Scope.Scope>;
 }
 
-export class TraceBus extends Context.Service<TraceBus, TraceBusShape>()("TraceBus") {}
+export const TraceBus = Context.GenericTag<TraceBusShape>("TraceBus");
 
 /**
  * Live TraceBus layer. Builds an unbounded PubSub.
@@ -33,7 +33,7 @@ export const TraceBusLive = Layer.effect(
 		return {
 			emit: (event: TraceEvent) =>
 				PubSub.publish(pubsub, event).pipe(
-					Effect.catchCause(() => Effect.void),
+					Effect.catchAllCause(() => Effect.void),
 					Effect.asVoid,
 				),
 			subscribe: () => PubSub.subscribe(pubsub),

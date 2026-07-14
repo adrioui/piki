@@ -5,10 +5,8 @@ export interface ProjectionStoreTagShape {
 	readonly store: ProjectionStore;
 }
 
-export class ProjectionStoreTag extends Context.Service<ProjectionStoreTag, ProjectionStoreTagShape>()(
-	"ProjectionStoreTag",
-) {}
+export const ProjectionStoreTag = Context.GenericTag<ProjectionStoreTagShape>("ProjectionStoreTag");
 
-export function makeProjectionStoreLayer(store: ProjectionStore): Layer.Layer<ProjectionStoreTag, never, never> {
+export function makeProjectionStoreLayer(store: ProjectionStore) {
 	return Layer.succeed(ProjectionStoreTag, { store });
 }

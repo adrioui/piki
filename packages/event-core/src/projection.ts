@@ -7,7 +7,7 @@ interface ProjectionStateEntry {
 
 /**
  * Resolve the initial state from a ProjectionDefinition, supporting both
- * plain values and factory functions (mirroring Magnitude's `initialState: () => ...`).
+ * plain values and factory functions (initialState: () => ...).
  */
 function resolveInitialState<TState>(definition: { initialState: TState | (() => TState) }): TState {
 	const raw = definition.initialState;

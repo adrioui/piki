@@ -1,4 +1,4 @@
-import { Effect, PubSub } from "effect";
+import { Effect, Queue } from "effect";
 import { describe, expect, it } from "vitest";
 import { TraceBus, TraceBusLive, type TraceEvent } from "../../src/runtime/trace-bus.ts";
 
@@ -31,9 +31,9 @@ describe("TraceBus", () => {
 					yield* bus.emit(sampleEvent("b"));
 					yield* bus.emit(sampleEvent("c"));
 
-					const msg1 = yield* PubSub.take(subscription);
-					const msg2 = yield* PubSub.take(subscription);
-					const msg3 = yield* PubSub.take(subscription);
+					const msg1 = yield* Queue.take(subscription);
+					const msg2 = yield* Queue.take(subscription);
+					const msg3 = yield* Queue.take(subscription);
 
 					expect(msg1.type).toBe("a");
 					expect(msg2.type).toBe("b");

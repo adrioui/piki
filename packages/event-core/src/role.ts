@@ -11,7 +11,7 @@ export interface RoleHostOptions<TEvent extends EventEnvelope = EventEnvelope> {
 /**
  * Role host that runs roles asynchronously after events are applied to projections.
  *
- * This is Phase 2 of Magnitude's two-phase processing:
+ * This is Phase 2 of the two-phase processing model:
  * - Phase 1 (synchronous): Projections reduce events to state
  * - Phase 2 (asynchronous): Roles react to events, read projections, publish new events
  *

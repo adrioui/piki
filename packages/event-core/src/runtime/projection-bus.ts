@@ -1,6 +1,6 @@
-// packages/event-core/src/runtime/projection-bus.ts
-// G18. Projection-bus signal-queue flush + ambient dispatch.
-// Adapted from magnitude's makeProjectionBusLayer() (artifact 69408-69640).
+// Projection-bus signal-queue flush + ambient dispatch.
+// Event-driven layer that applies events through registered handlers, emits
+// signals, and dispatches ambient changes in dependency-topological order.
 import { Context, Data, Effect, Layer, Ref } from "effect";
 import type { EventEnvelope, Signal } from "../types.ts";
 import { FrameworkErrorReporter } from "./framework-error.ts";
@@ -9,7 +9,7 @@ import { FrameworkErrorReporter } from "./framework-error.ts";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Max iterations of the signal-flush loop before warning. Verbatim from magnitude. */
+/** Max iterations of the signal-flush loop before warning. */
 const MAX_SIGNAL_FLUSH_ITERATIONS = 100;
 
 // ---------------------------------------------------------------------------
@@ -83,13 +83,13 @@ export interface ProjectionBusShape {
 // Service tag
 // ---------------------------------------------------------------------------
 
-export class ProjectionBus extends Context.Service<ProjectionBus, ProjectionBusShape>()("ProjectionBus") {}
+export const ProjectionBus = Context.GenericTag<ProjectionBusShape>("ProjectionBus");
 
 // ---------------------------------------------------------------------------
 // Topological sort
 // ---------------------------------------------------------------------------
 
-/** Kahn's topological sort — verbatim of magnitude (artifact 69408-69437).
+/** Kahn's topological sort over handler names using the dependency graph.
  *  Returns input order on cyclic graphs (best-effort; cycle detection is
  *  `validateNoCycles`'s job). */
 function topologicalSort(handlerNames: readonly string[], dependencyGraph: Map<string, Set<string>>): string[] {
@@ -135,17 +135,19 @@ function topologicalSort(handlerNames: readonly string[], dependencyGraph: Map<s
 
 /**
  * Live ProjectionBus layer. Requires FrameworkErrorReporter for failure isolation.
- * Adapted from magnitude's makeProjectionBusLayer() (artifact 69408-69640).
+ * Event-driven layer that applies an event through the bus: dispatches the
+ * matching event handlers (topologically sorted by dependency), then flushes
+ * the signal queue.
  *
  * NOTE: Uses `Layer.effect` (NOT `Layer.scoped` — absent in effect@4.0.0-beta.93).
  * Ref.make(...) returns Effect<Ref<...>, never, never> (no Scope needed), so
  * `Layer.effect` auto-strips Scope from requirements.
  */
-export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkErrorReporter> = Layer.effect(
+export const ProjectionBusLive = Layer.effect(
 	ProjectionBus,
 	Effect.gen(function* () {
 		const reporter = yield* FrameworkErrorReporter;
-		// Five Refs from magnitude
+		// Five Refs for mutable handler/queue state
 		const eventHandlersRef = yield* Ref.make<ProjectionEventHandler[]>([]);
 		const signalHandlersRef = yield* Ref.make<Map<string, ProjectionSignalHandler[]>>(new Map());
 		const ambientHandlersRef = yield* Ref.make<Map<string, ProjectionAmbientHandler[]>>(new Map());
@@ -161,7 +163,7 @@ export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkError
 		const currentEventTimestampRef = yield* Ref.make(Date.now());
 
 		// Flush loop — drains signalQueueRef up to MAX_SIGNAL_FLUSH_ITERATIONS times.
-		// Verbatim of magnitude's flushSignalQueue closure (artifact 69408-69515).
+		// Drains the signal queue up to MAX_SIGNAL_FLUSH_ITERATIONS.
 		const flushSignalQueue = Effect.gen(function* () {
 			let iterations = 0;
 			const graph = yield* Ref.get(dependencyGraphRef);
@@ -193,7 +195,7 @@ export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkError
 						const handlerItem = nameToHandler.get(name);
 						if (handlerItem) {
 							yield* handlerItem.handler(timestampedValue, sourceState).pipe(
-								Effect.catchCause((cause) =>
+								Effect.catchAllCause((cause: unknown) =>
 									reporter.report({
 										_tag: "ProjectionSignalHandlerError",
 										projectionName: name,
@@ -217,7 +219,7 @@ export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkError
 
 			registerSignalHandler: (signalName: string, handler: ProjectionSignalHandler) =>
 				Effect.gen(function* () {
-					// Derive source projection from signal name (magnitude pattern)
+					// Derive source projection from signal name (standard pattern)
 					const sourceProjection = signalName.split("/")[0] ?? handler.name;
 					// Skip self-dependency to avoid spurious cycle edges
 					if (sourceProjection !== handler.name) {
@@ -308,7 +310,7 @@ export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkError
 						const handlerItem = nameToHandler.get(name);
 						if (handlerItem?.eventTypes.includes(event.type)) {
 							yield* handlerItem.handler(event).pipe(
-								Effect.catchCause((cause) =>
+								Effect.catchAllCause((cause: unknown) =>
 									reporter.report({
 										_tag: "ProjectionEventHandlerError",
 										projectionName: name,
@@ -335,7 +337,7 @@ export const ProjectionBusLive: Layer.Layer<ProjectionBus, never, FrameworkError
 						const handlerItem = nameToHandler.get(name);
 						if (handlerItem) {
 							yield* handlerItem.handler(value).pipe(
-								Effect.catchCause((cause) =>
+								Effect.catchAllCause((cause: unknown) =>
 									reporter.report({
 										_tag: "ProjectionSignalHandlerError",
 										projectionName: name,

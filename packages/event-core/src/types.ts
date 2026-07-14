@@ -31,7 +31,7 @@ export interface EventStore<TEvent extends EventEnvelope = EventEnvelope> {
  * Unlike events, signals are not persisted — they are ephemeral coordination messages
  * that flow through the runtime's signal bus.
  *
- * Magnitude uses signals for inter-projection and inter-role communication
+ * Signals are used for inter-projection and inter-role communication
  * (e.g. TaskGraph/taskCreated, TaskGraph/taskCompleted).
  */
 export interface Signal<TType extends string = string, TPayload = unknown> {
@@ -45,7 +45,7 @@ export interface SignalDefinition<TType extends string = string, _TPayload = unk
 }
 
 /**
- * Creates a typed signal definition (mirrors Magnitude's `exports_signal.create`).
+ * Creates a typed signal definition.
  */
 export function createSignal<TType extends string, TPayload = unknown>(
 	type: TType,
@@ -73,9 +73,8 @@ export interface SignalBus {
 /**
  * Projection definition with explicit reads/writes dependencies and signal emissions.
  *
- * This mirrors Magnitude's `exports_projection.define()` pattern where each
- * projection declares which other projections it reads from and writes to,
- * enabling topological ordering and cycle detection.
+ * This follows the pattern where each projection declares which other projections
+ * it reads from and writes to, enabling topological ordering and cycle detection.
  */
 export interface ProjectionDefinition<TEvent extends EventEnvelope = EventEnvelope, TState = unknown> {
 	name: string;
@@ -85,7 +84,7 @@ export interface ProjectionDefinition<TEvent extends EventEnvelope = EventEnvelo
 	writes?: string[];
 	/** Signals emitted by this projection's reduce function. */
 	signals?: SignalDefinition[];
-	/** Initial state factory (like Magnitude's `initialState: () => ...`). */
+	/** Initial state factory (supports factory functions for lazy initialization). */
 	initialState: TState | (() => TState);
 	/** Pure reducer that produces next state from current state + event. */
 	reduce: (state: TState, event: TEvent) => TState;
@@ -127,7 +126,7 @@ export interface RoleDefinition<TEvent extends EventEnvelope = EventEnvelope> {
 	listenSignals?: string[];
 	/** The role's execution function. */
 	run: (context: RoleContext<TEvent>) => Promise<void> | void;
-	/** Per-key concurrency serialization (like Magnitude's per-task locking). */
+	/** Per-key concurrency serialization for preventing race conditions. */
 	concurrencyKey?: (event: TEvent) => string;
 }
 
@@ -135,7 +134,7 @@ export interface RoleDefinition<TEvent extends EventEnvelope = EventEnvelope> {
  * The EventSink is the central event bus that persists events, applies
  * projections synchronously, dispatches signals, and runs roles asynchronously.
  *
- * This is Pi's equivalent of Magnitude's two-phase processing:
+ * Two-phase processing model:
  * - Phase 1 (synchronous): Projections (deterministic state reduction)
  * - Phase 2 (asynchronous): Workers/Roles (side effects, LLM calls)
  */

@@ -2,7 +2,7 @@
 import { Context, Data, Effect, Layer, Ref } from "effect";
 
 /** Defect raised by `depend()` when no service is registered under `name`.
- *  Following magnitude, a missing ambient is a programming error (defect),
+ *  A missing ambient is a programming error (defect),
  *  not a recoverable failure — callers wanting recovery should use `lookup`. */
 export class UnregisteredAmbientDefect extends Data.TaggedError("UnregisteredAmbientDefect")<{
 	readonly ambientName: string;
@@ -21,7 +21,7 @@ export interface AmbientShape {
 	readonly depend: <T>(name: string) => Effect.Effect<T>;
 }
 
-export class Ambient extends Context.Service<Ambient, AmbientShape>()("Ambient") {}
+export const Ambient = Context.GenericTag<AmbientShape>("Ambient");
 
 /**
  * Live layer: a fresh scoped Map per scope build.

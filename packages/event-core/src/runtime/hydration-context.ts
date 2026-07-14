@@ -8,7 +8,7 @@ export interface HydrationContextShape {
 	readonly setHydrating: (value: boolean) => Effect.Effect<void>;
 }
 
-export class HydrationContext extends Context.Service<HydrationContext, HydrationContextShape>()("HydrationContext") {}
+export const HydrationContext = Context.GenericTag<HydrationContextShape>("HydrationContext");
 
 /**
  * Default live layer: starts with isHydrating=false.

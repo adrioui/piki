@@ -9,6 +9,7 @@ import {
 	makeRoleHostLayer,
 	makeSurfaceClient,
 	SurfaceCommand,
+	type SurfaceCtx,
 	SurfaceLayer,
 } from "../../src/runtime/index.ts";
 import { DefaultEventSink } from "../../src/sink.ts";
@@ -51,11 +52,12 @@ describe("Surface", () => {
 	it("binds a publish command routed through EventSinkTag", async () => {
 		const deps = makeFoundationDeps();
 
-		const publishCommand = SurfaceCommand((e: EventEnvelope) =>
-			Effect.gen(function* () {
-				const sinkTag = yield* EventSinkTag;
-				return yield* Effect.promise(() => sinkTag.sink.publish(e));
-			}),
+		const publishCommand = SurfaceCommand(
+			(e: EventEnvelope) =>
+				Effect.gen(function* () {
+					const sinkTag = yield* EventSinkTag;
+					return yield* Effect.promise(() => sinkTag.sink.publish(e));
+				}) as unknown as Effect.Effect<void, never, SurfaceCtx>,
 		);
 
 		const surface = { publish: publishCommand };
@@ -67,7 +69,9 @@ describe("Surface", () => {
 			makeEventSinkLayer(deps.sink),
 		);
 
-		const client = await Effect.runPromise(makeSurfaceClient(surface).pipe(Effect.provide(layer)));
+		const client = await Effect.runPromise(
+			makeSurfaceClient(surface).pipe(Effect.provide(layer)) as Effect.Effect<typeof surface, never, never>,
+		);
 
 		const event = testEvent();
 		const publish = client.publish as unknown as (e: EventEnvelope) => Effect.Effect<unknown>;

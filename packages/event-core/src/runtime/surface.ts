@@ -32,13 +32,13 @@ export interface SurfaceSignal<A extends readonly unknown[] = readonly unknown[]
 
 /** Union of all foundation Tags a surface can access. */
 export type SurfaceCtx =
-	| Ambient
-	| TraceBus
-	| HydrationContext
-	| FrameworkErrorReporter
-	| EventSinkTag
-	| ProjectionStoreTag
-	| RoleHostTag;
+	| typeof Ambient
+	| typeof TraceBus
+	| typeof HydrationContext
+	| typeof FrameworkErrorReporter
+	| typeof EventSinkTag
+	| typeof ProjectionStoreTag
+	| typeof RoleHostTag;
 
 // ---------------------------------------------------------------------------
 // Constructors
@@ -72,7 +72,7 @@ const frameworkErrorLayer = FrameworkErrorReporterLive.pipe(Layer.provideMerge(F
 export const SurfaceLayer = Layer.mergeAll(AmbientLive, TraceBusLive, HydrationContextLive, frameworkErrorLayer);
 
 // ---------------------------------------------------------------------------
-// Recursive binder (verbatim of magnitude's bindEffectSurface)
+// Recursive binder for the effect-surface binding helper.
 // ---------------------------------------------------------------------------
 
 /**
@@ -120,7 +120,7 @@ function bindEffectSurface<T>(value: T, ctx: Context.Context<SurfaceCtx>): T {
 
 /**
  * Lift a surface host (record of Command/Signal leaves) into an
- * Effect-context-bound client. Mirrors magnitude's `effectClient(surfaceHost)`.
+ * Effect-context-bound client. Binds commands/signals to the surface host context.
  * Captures whatever the surrounding Effect layer provides.
  */
 export function makeSurfaceClient<T extends Record<string, unknown>>(surface: T): Effect.Effect<T, never, SurfaceCtx> {
@@ -138,7 +138,7 @@ export function makeSurfaceClient<T extends Record<string, unknown>>(surface: T)
  * Lift a surface host into a vanilla JS callback client backed by a
  * ManagedRuntime. Allocates the runtime, binds leaves, tracks active stream
  * subscriptions, and returns a `dispose()` to shut everything down.
- * Mirrors magnitude's `vanillaClient`.
+ * Vanilla client bound to the surface host (no Effect context).
  */
 export function makeVanillaClient<T extends Record<string, unknown>>(
 	layer: Layer.Layer<unknown>,

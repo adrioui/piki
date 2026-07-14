@@ -34,7 +34,7 @@ export interface DefaultEventSinkOptions<TEvent extends EventEnvelope = EventEnv
 /**
  * Default EventSink implementation.
  *
- * Implements Magnitude's two-phase processing:
+ * Implements a two-phase processing model:
  * - Phase 1 (synchronous): Apply projections → persist durable event → extract signals
  * - Phase 2 (asynchronous): Dispatch signals → run matching roles
  *

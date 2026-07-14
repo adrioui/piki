@@ -1,10 +1,9 @@
 // packages/event-core/test/runtime/defineForked.test.ts
 // Tests for defineForked — per-fork fiber lifecycle management.
 
-import { Effect, Layer } from "effect";
+import { Context, Effect, type Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope, Signal } from "../../src/types.ts";
-import type { ForkedWorkerConfig, ForkedWorkerShape } from "../../src/worker/defineForked.ts";
 import { defineForked } from "../../src/worker/defineForked.ts";
 
 // ---------------------------------------------------------------------------
@@ -31,16 +30,9 @@ function makeSignal(type: string, payload: Record<string, unknown> = {}): Signal
 	return { type, payload };
 }
 
-async function _runWithWorker<T>(
-	config: ForkedWorkerConfig,
-	fn: (worker: ForkedWorkerShape) => Effect.Effect<T>,
-): Promise<T> {
-	const { Tag, Live } = defineForked(config);
-	return Effect.runPromise(
-		fn(undefined as never)
-			.pipe(Effect.provide(Live as Layer.Layer<never>), Effect.provide(Layer.succeed(Tag, undefined as never)))
-			.pipe(Effect.catchCause(() => Effect.die("unreachable"))),
-	);
+/** Run an Effect with a provided layer, casting away remaining requirements. */
+function runWithLayer<A>(effect: Effect.Effect<A, any, any>, layer: Layer.Layer<any, any, any>): Promise<A> {
+	return Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
 }
 
 // ---------------------------------------------------------------------------
@@ -52,7 +44,7 @@ describe("defineForked", () => {
 		const handled: Array<{ forkId: string; eventType: string }> = [];
 		const _processed: string[] = [];
 
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "TestWorker",
 			eventHandlers: {
 				task_started: (event, _publish, _read) =>
@@ -67,7 +59,7 @@ describe("defineForked", () => {
 			},
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -87,12 +79,13 @@ describe("defineForked", () => {
 
 				expect(handled).toHaveLength(1);
 				expect(handled[0]).toEqual({ forkId: "fork-1", eventType: "task_started" });
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 
 	it("G8-T2 — fork completes on completeOn event and is removed", async () => {
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "CompleteWorker",
 			eventHandlers: {
 				task_started: () => Effect.void,
@@ -103,7 +96,7 @@ describe("defineForked", () => {
 			},
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -118,29 +111,32 @@ describe("defineForked", () => {
 				expect(ids).not.toContain("fork-A");
 				// Main fork still alive
 				expect(ids).toContain("__main__");
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 
 	it("G8-T3 — signal handlers resolve correct forkId", async () => {
 		const signalCalls: Array<{ signal: string; payload: unknown }> = [];
 
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "SignalWorker",
 			forkLifecycle: {
 				activateOn: "agent_created",
 				completeOn: "agent_finished",
 			},
 			signalHandlers: (on) => [
-				on("TaskGraph/taskCreated", (value, _publish, _read) =>
-					Effect.sync(() => {
-						signalCalls.push({ signal: "TaskGraph/taskCreated", payload: value });
-					}),
+				on(
+					{ name: "TaskGraph/taskCreated", tag: Context.GenericTag<unknown>("TaskGraph/taskCreated") },
+					(value, _publish, _read) =>
+						Effect.sync(() => {
+							signalCalls.push({ signal: "TaskGraph/taskCreated", payload: value });
+						}),
 				),
 			],
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -155,14 +151,15 @@ describe("defineForked", () => {
 				yield* worker.processSignal(makeSignal("TaskGraph/taskCreated", { taskId: "t2" }));
 
 				expect(signalCalls).toHaveLength(2);
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 
 	it("G8-T4 — multiple forks managed independently", async () => {
 		const handled: Array<{ forkId: string; eventType: string }> = [];
 
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "MultiForkWorker",
 			eventHandlers: {
 				task_event: (event, _publish, _read) =>
@@ -177,7 +174,7 @@ describe("defineForked", () => {
 			},
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -208,12 +205,13 @@ describe("defineForked", () => {
 				const afterIds = yield* worker.activeForkIds;
 				expect(afterIds).not.toContain("fork-X");
 				expect(afterIds).toContain("fork-Y");
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 
 	it("G8-T5 — duplicate activateOn does not spawn a second fiber", async () => {
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "DedupWorker",
 			eventHandlers: {},
 			forkLifecycle: {
@@ -222,7 +220,7 @@ describe("defineForked", () => {
 			},
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -230,14 +228,15 @@ describe("defineForked", () => {
 				yield* worker.processEvent(makeEvent("agent_created", { forkId: "fork-dup" }));
 
 				const ids = yield* worker.activeForkIds;
-				const dupCount = ids.filter((id) => id === "fork-dup").length;
+				const dupCount = ids.filter((id: string) => id === "fork-dup").length;
 				expect(dupCount).toBe(1);
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 
 	it("G8-T6 — activateOn and completeOn accept arrays", async () => {
-		const { Tag, Live } = defineForked({
+		const { Tag, Layer } = defineForked({
 			name: "ArrayLifecycleWorker",
 			eventHandlers: {},
 			forkLifecycle: {
@@ -246,7 +245,7 @@ describe("defineForked", () => {
 			},
 		});
 
-		await Effect.runPromise(
+		await runWithLayer(
 			Effect.gen(function* () {
 				const worker = yield* Tag;
 
@@ -270,7 +269,8 @@ describe("defineForked", () => {
 				yield* worker.processEvent(makeEvent("worker_killed", { forkId: "arr-2" }));
 				ids = yield* worker.activeForkIds;
 				expect(ids).not.toContain("arr-2");
-			}).pipe(Effect.provide(Live)),
+			}),
+			Layer,
 		);
 	});
 });
