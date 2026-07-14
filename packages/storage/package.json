@@ -1,0 +1,41 @@
+{
+	"name": "@piki/storage",
+	"version": "0.80.2",
+	"description": "Storage services (global, project, session, memory, logs) for piki",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist"
+	],
+	"scripts": {
+		"clean": "shx rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json",
+		"test": "vitest --run",
+		"prepublishOnly": "npm run clean && npm run build"
+	},
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"dependencies": {
+		"@piki/agent-core": "^0.80.2",
+		"@piki/scratchpad": "^0.80.2",
+		"effect": "3.21.4",
+		"proper-lockfile": "4.1.2"
+	},
+	"devDependencies": {
+		"@types/node": "24.12.4",
+		"@types/proper-lockfile": "4.1.4",
+		"shx": "0.4.0",
+		"typescript": "5.9.3",
+		"vitest": "4.1.9"
+	}
+}

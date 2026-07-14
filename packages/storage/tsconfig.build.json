@@ -1,0 +1,15 @@
+{
+	"extends": "../../tsconfig.base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"rootDir": "./src",
+		"paths": {
+			"@piki/agent-core": ["../agent/dist/index.d.ts"],
+			"@piki/agent-core/*": ["../agent/dist/*.d.ts"],
+			"@piki/scratchpad": ["../scratchpad/dist/index.d.ts"],
+			"@piki/scratchpad/*": ["../scratchpad/dist/*.d.ts"]
+		}
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["node_modules", "dist", "**/*.d.ts"]
+}

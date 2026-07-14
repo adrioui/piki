@@ -1,0 +1,30 @@
+{
+  "name": "@piki/piki-client",
+  "version": "0.80.2",
+  "description": "piki server client — role-based model routing via app.piki.dev",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "clean": "shx rm -rf dist",
+    "build": "tsgo -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@piki/ai": "^0.80.2",
+    "@effect/platform": "0.79.4",
+    "effect": "3.21.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "shx": "0.4.0",
+    "typescript": "5.9.3"
+  },
+  "license": "MIT"
+}
