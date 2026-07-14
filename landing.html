@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Piki — An agent harness for coding, automation</title>
+	<meta name="description" content="Multi-provider AI, a worker runtime, an extension system, and a terminal UI — all wired together. Ships as a single CLI.">
+	<meta name="theme-color" content="#181818">
+
+	<meta property="og:title" content="Piki — Agent harness for coding & automation">
+	<meta property="og:description" content="Multi-provider AI, a worker runtime, an extension system, and a terminal UI. Ships as a single CLI.">
+	<meta property="og:type" content="website">
+	<meta property="og:url" content="https://piki.dev">
+
+	<meta name="twitter:card" content="summary_large_image">
+	<meta name="twitter:title" content="Piki — Agent harness for coding & automation">
+	<meta name="twitter:description" content="Multi-provider AI, a worker runtime, an extension system, and a terminal UI. Ships as a single CLI.">
+
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+	<style>
+		*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+		:root {
+			--canvas: #787878;
+			--dark: #181818;
+			--dark-surface: #1e1e1e;
+			--dark-border: rgba(255,255,255,0.08);
+			--white: #ffffff;
+			--white-dim: rgba(255,255,255,0.65);
+			--white-faint: rgba(255,255,255,0.35);
+			--ink: #333333;
+			--ink-dim: #666666;
+			--ink-faint: #999999;
+			--accent: oklch(70% .24 340);
+			--accent-dim: oklch(55% .18 340);
+			--border: #e0e0e0;
+			--font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+			--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+		}
+
+		::selection { background: oklch(70% .24 340 / .25); }
+
+		html {
+			scroll-behavior: smooth;
+			-webkit-font-smoothing: antialiased;
+		}
+
+		body {
+			font-family: var(--font-sans);
+			line-height: 1.6;
+			font-size: 15px;
+			background: var(--canvas);
+			color: var(--ink);
+			overflow-x: hidden;
+		}
+
+		a { color: inherit; text-decoration: none; }
+
+		/* ── Skip link ── */
+		.skip { position: absolute; top: -100px; left: 1rem; background: var(--accent); color: #fff; padding: .5rem 1rem; border-radius: 6px; font-family: var(--font-mono); font-size: 12px; z-index: 200; }
+		.skip:focus { top: 1rem; }
+
+		/* ═══════════════════════════════════════════
+		   NAV
+		   ═══════════════════════════════════════════ */
+		.nav {
+			position: sticky;
+			top: 0;
+			z-index: 100;
+			background: var(--dark);
+			border-bottom: 1px solid var(--dark-border);
+		}
+
+		.nav-inner {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 0 2rem;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			height: 56px;
+		}
+
+		.nav-brand {
+			font-family: var(--font-mono);
+			font-weight: 700;
+			font-size: 1.15rem;
+			color: #fff;
+			letter-spacing: -.03em;
+		}
+
+		.nav-right {
+			display: flex;
+			align-items: center;
+			gap: 1.5rem;
+		}
+
+		.nav-link {
+			font-family: var(--font-mono);
+			font-size: 12px;
+			letter-spacing: .03em;
+			color: var(--white-dim);
+			transition: color .2s;
+		}
+		.nav-link:hover { color: #fff; }
+
+		.nav-cta {
+			font-family: var(--font-mono);
+			font-size: 12px;
+			font-weight: 600;
+			letter-spacing: .03em;
+			color: #fff;
+			background: var(--accent);
+			padding: .45rem 1rem;
+			border-radius: 5px;
+			transition: opacity .2s;
+		}
+		.nav-cta:hover { opacity: .85; }
+
+		.nav-toggle {
+			display: none;
+			background: none;
+			border: none;
+			color: #fff;
+			cursor: pointer;
+			padding: .4rem;
+		}
+		.nav-toggle svg { width: 22px; height: 22px; }
+
+		/* ═══════════════════════════════════════════
+		   HERO — dark zone
+		   ═══════════════════════════════════════════ */
+		.hero {
+			background: var(--dark);
+			padding: clamp(4rem, 3rem + 5vw, 8rem) 2rem clamp(3.5rem, 2.5rem + 4vw, 6.5rem);
+		}
+
+		.hero-inner {
+			max-width: 1200px;
+			margin: 0 auto;
+		}
+
+		.hero h1 {
+			font-size: clamp(2.4rem, 1.5rem + 4vw, 5rem);
+			font-weight: 800;
+			letter-spacing: -.04em;
+			line-height: 1;
+			color: #fff;
+			margin-bottom: 1.2rem;
+			text-wrap: balance;
+			max-width: 700px;
+		}
+		.hero h1 .accent { color: var(--accent); }
+
+		.hero-sub {
+			font-size: clamp(1rem, .95rem + .2vw, 1.15rem);
+			color: var(--white-dim);
+			line-height: 1.6;
+			max-width: 500px;
+			margin-bottom: 2rem;
+		}
+
+		/* Install widget */
+		.hero-install {
+			display: flex;
+			align-items: center;
+			gap: .6rem;
+			background: var(--dark-surface);
+			border: 1px solid var(--dark-border);
+			border-radius: 8px;
+			padding: .5rem .6rem .5rem 1rem;
+			max-width: 440px;
+			margin-bottom: 1.5rem;
+		}
+
+		.hero-install code {
+			flex: 1;
+			font-family: var(--font-mono);
+			font-size: 13px;
+			color: #fff;
+			overflow-x: auto;
+			white-space: nowrap;
+		}
+		.hero-install code .dim { color: var(--white-faint); }
+
+		.copy-btn {
+			background: transparent;
+			border: none;
+			color: var(--white-faint);
+			cursor: pointer;
+			padding: .3rem;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 5px;
+			transition: color .2s;
+			flex-shrink: 0;
+		}
+		.copy-btn:hover { color: #fff; }
+		.copy-btn.copied { color: #4ade80; }
+		.copy-btn svg { width: 15px; height: 15px; }
+
+		.hero-meta {
+			font-family: var(--font-mono);
+			font-size: 11px;
+			color: var(--white-faint);
+			margin-bottom: 2.5rem;
+		}
+
+		/* Stats */
+		.stats {
+			display: flex;
+			gap: 3rem;
+			border-top: 1px solid var(--dark-border);
+			padding-top: 1.5rem;
+		}
+		.stat-val {
+			font-size: 1.4rem;
+			font-weight: 700;
+			color: #fff;
+			font-variant-numeric: tabular-nums;
+			line-height: 1.2;
+		}
+		.stat-lbl {
+			font-family: var(--font-mono);
+			font-size: 10px;
+			letter-spacing: .15em;
+			text-transform: uppercase;
+			color: var(--white-faint);
+		}
+
+		/* ═══════════════════════════════════════════
+		   CANVAS — gray background for all content
+		   ═══════════════════════════════════════════ */
+		.canvas {
+			background: var(--canvas);
+		}
+
+		.section {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: clamp(3rem, 2rem + 3vw, 5rem) 2rem;
+		}
+
+		/* Section label */
+		.label {
+			font-family: var(--font-mono);
+			font-size: 11px;
+			letter-spacing: .2em;
+			text-transform: uppercase;
+			color: var(--ink-faint);
+			margin-bottom: 1rem;
+			display: flex;
+			align-items: center;
+			gap: .7rem;
+		}
+		.label .num { color: var(--accent-dim); font-weight: 600; font-size: 12px; }
+		.label::after {
+			content: '';
+			flex: 1;
+			height: 1px;
+			background: rgba(0,0,0,.12);
+		}
+
+		.section-heading {
+			font-size: clamp(1.6rem, 1.2rem + 1vw, 2.4rem);
+			font-weight: 800;
+			letter-spacing: -.03em;
+			line-height: 1.1;
+			color: var(--ink);
+			margin-bottom: .8rem;
+			text-wrap: balance;
+		}
+
+		.section-desc {
+			color: var(--ink-dim);
+			max-width: 560px;
+			line-height: 1.7;
+			margin-bottom: 2rem;
+		}
+		.section-desc strong { color: var(--ink); font-weight: 600; }
+		.section-desc code {
+			font-family: var(--font-mono);
+			font-size: .85em;
+			background: rgba(0,0,0,.06);
+			border: 1px solid var(--border);
+			border-radius: 4px;
+			padding: .1em .35em;
+		}
+
+		/* White card floating on gray */
+		.card {
+			background: #fff;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 2rem;
+		}
+
+		/* ═══════════════════════════════════════════
+		   ABOUT — single floating card
+		   ═══════════════════════════════════════════ */
+		.about-body {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 2rem;
+		}
+
+		.about-body p {
+			color: var(--ink-dim);
+			line-height: 1.7;
+			font-size: .95rem;
+		}
+		.about-body p strong { color: var(--ink); }
+
+		/* ═══════════════════════════════════════════
+		   FEATURES — derivative.ca alternation style
+		   Left: icon + title + description + tag
+		   Right: visual placeholder
+		   ═══════════════════════════════════════════ */
+		.feature-row {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 0;
+			margin-bottom: 2px;
+			background: #fff;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			overflow: hidden;
+			transition: box-shadow .3s;
+		}
+		.feature-row:hover {
+			box-shadow: 0 6px 24px rgba(0,0,0,.08);
+		}
+
+		.feature-row.reverse { direction: rtl; }
+		.feature-row.reverse > * { direction: ltr; }
+
+		.feature-info {
+			padding: clamp(1.5rem, 1rem + 2vw, 3rem);
+			display: flex;
+			flex-direction: column;
+			justify-content: center;
+		}
+
+		.feature-icon {
+			font-size: 2rem;
+			margin-bottom: .8rem;
+			line-height: 1;
+		}
+
+		.feature-info h3 {
+			font-size: 1.2rem;
+			font-weight: 700;
+			letter-spacing: -.02em;
+			margin-bottom: .5rem;
+			color: var(--ink);
+		}
+
+		.feature-info p {
+			color: var(--ink-dim);
+			font-size: .9rem;
+			line-height: 1.65;
+			margin-bottom: .8rem;
+		}
+
+		.feature-tag {
+			font-family: var(--font-mono);
+			font-size: 10px;
+			letter-spacing: .1em;
+			text-transform: uppercase;
+			color: var(--accent-dim);
+		}
+
+		.feature-visual {
+			background: var(--canvas);
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			min-height: 220px;
+			position: relative;
+			overflow: hidden;
+		}
+
+		/* Abstract terminal mockups for feature visuals */
+		.mock-terminal {
+			background: var(--dark);
+			border-radius: 8px;
+			width: 80%;
+			max-width: 280px;
+			box-shadow: 0 8px 32px rgba(0,0,0,.3);
+			overflow: hidden;
+		}
+
+		.mock-bar {
+			display: flex;
+			gap: 6px;
+			padding: 10px 12px;
+			border-bottom: 1px solid var(--dark-border);
+		}
+		.mock-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dark-border); }
+		.mock-dot:nth-child(1) { background: #ff5f57; }
+		.mock-dot:nth-child(2) { background: #febc2e; }
+		.mock-dot:nth-child(3) { background: #28c840; }
+
+		.mock-body {
+			padding: 12px 14px;
+			font-family: var(--font-mono);
+			font-size: 11px;
+			line-height: 1.7;
+			color: var(--white-dim);
+		}
+		.mock-body .g { color: #4ade80; }
+		.mock-body .a { color: var(--accent); }
+		.mock-body .d { color: var(--white-faint); }
+
+		/* ═══════════════════════════════════════════
+		   ARCHITECTURE — package grid
+		   ═══════════════════════════════════════════ */
+		.arch-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+			gap: 2px;
+		}
+
+		.arch-card {
+			background: #fff;
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			padding: 1.2rem 1.4rem;
+			transition: box-shadow .3s;
+		}
+		.arch-card:hover {
+			box-shadow: 0 4px 16px rgba(0,0,0,.06);
+		}
+
+		.arch-card.core {
+			border-color: oklch(70% .24 340 / .25);
+		}
+
+		.arch-pkg {
+			font-family: var(--font-mono);
+			font-size: 12px;
+			font-weight: 600;
+			color: var(--accent-dim);
+			margin-bottom: .35rem;
+			letter-spacing: -.01em;
+		}
+
+		.arch-desc {
+			font-size: .8rem;
+			color: var(--ink-dim);
+			line-height: 1.45;
+		}
+
+		/* ═══════════════════════════════════════════
+		   INSTALL — method cards
+		   ═══════════════════════════════════════════ */
+		.install-grid {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 2px;
+		}
+
+		.install-card {
+			background: #fff;
+			border: 1px solid var(--border);
+			border-radius: 10px;
+			padding: 2rem;
+			display: flex;
+			flex-direction: column;
+			gap: .7rem;
+		}
+
+		.install-card h3 {
+			font-size: 1.05rem;
+			font-weight: 700;
+			display: flex;
+			align-items: center;
+			gap: .5rem;
+		}
+
+		.badge {
+			font-family: var(--font-mono);
+			font-size: 9px;
+			letter-spacing: .08em;
+			text-transform: uppercase;
+			color: var(--accent-dim);
+			background: oklch(70% .24 340 / .08);
+			padding: .2em .55em;
+			border-radius: 3px;
+		}
+
+		.install-code {
+			font-family: var(--font-mono);
+			font-size: 13px;
+			background: rgba(0,0,0,.04);
+			border: 1px solid var(--border);
+			border-radius: 7px;
+			padding: .6rem .9rem;
+			color: var(--ink);
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: .5rem;
+			letter-spacing: -.01em;
+		}
+
+		.install-code .copy-btn { color: var(--ink-faint); }
+		.install-code .copy-btn:hover { color: var(--ink); }
+		.install-code .copy-btn.copied { color: #16a34a; }
+
+		.install-platforms {
+			font-family: var(--font-mono);
+			font-size: 10px;
+			color: var(--ink-faint);
+			letter-spacing: .04em;
+		}
+
+		/* ═══════════════════════════════════════════
+		   DEVELOPMENT — steps
+		   ═══════════════════════════════════════════ */
+		.dev-steps {
+			max-width: 480px;
+			display: flex;
+			flex-direction: column;
+			gap: 3px;
+		}
+
+		.dev-step {
+			font-family: var(--font-mono);
+			font-size: 13px;
+			display: flex;
+			align-items: center;
+			gap: .8rem;
+			padding: .55rem 1rem;
+			background: #fff;
+			border: 1px solid var(--border);
+			border-radius: 6px;
+			color: var(--ink);
+		}
+		.dev-step .n {
+			color: var(--ink-faint);
+			font-size: 11px;
+			flex-shrink: 0;
+			width: 18px;
+		}
+
+		/* ═══════════════════════════════════════════
+		   FOOTER — dark
+		   ═══════════════════════════════════════════ */
+		.footer {
+			background: var(--dark);
+			border-top: 1px solid var(--dark-border);
+		}
+
+		.footer-inner {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 2.5rem 2rem;
+			display: flex;
+			flex-wrap: wrap;
+			justify-content: space-between;
+			align-items: center;
+			gap: 1rem;
+		}
+
+		.footer-brand {
+			font-family: var(--font-mono);
+			font-size: 1.05rem;
+			font-weight: 700;
+			color: #fff;
+			letter-spacing: -.03em;
+		}
+
+		.footer-copy {
+			font-family: var(--font-mono);
+			font-size: 11px;
+			color: var(--white-faint);
+		}
+
+		.footer-links {
+			display: flex;
+			gap: 1.5rem;
+		}
+
+		.footer-links a {
+			font-family: var(--font-mono);
+			font-size: 12px;
+			color: var(--white-dim);
+			transition: color .2s;
+		}
+		.footer-links a:hover { color: #fff; }
+
+		/* ═══════════════════════════════════════════
+		   SCROLL REVEAL
+		   ═══════════════════════════════════════════ */
+		.reveal {
+			opacity: 0;
+			transform: translateY(12px);
+			transition: opacity .6s cubic-bezier(.16, 1, .3, 1), transform .6s cubic-bezier(.16, 1, .3, 1);
+			transition-delay: var(--d, 0ms);
+		}
+		.reveal.in { opacity: 1; transform: none; }
+
+		@media (prefers-reduced-motion: reduce) {
+			.reveal { opacity: 1; transform: none; transition: none; }
+		}
+
+		/* ═══════════════════════════════════════════
+		   RESPONSIVE
+		   ═══════════════════════════════════════════ */
+		@media (max-width: 768px) {
+			.nav-link { display: none; }
+			.nav-toggle { display: block; }
+			.nav-right .nav-links-open { display: flex; flex-direction: column; position: absolute; top: 56px; left: 0; right: 0; background: var(--dark); border-bottom: 1px solid var(--dark-border); padding: 1rem 2rem 1.5rem; gap: 1rem; }
+			.hero h1 { font-size: clamp(2rem, 1.5rem + 3vw, 3rem); }
+			.stats { gap: 1.5rem; flex-wrap: wrap; }
+			.about-body { grid-template-columns: 1fr; }
+			.feature-row { grid-template-columns: 1fr; }
+			.feature-row.reverse { direction: ltr; }
+			.feature-visual { min-height: 160px; }
+			.arch-grid { grid-template-columns: 1fr 1fr; }
+			.install-grid { grid-template-columns: 1fr; }
+			.footer-inner { flex-direction: column; align-items: flex-start; }
+			.footer-links { flex-wrap: wrap; gap: 1rem; }
+		}
+
+		@media (min-width: 769px) and (max-width: 1024px) {
+			.arch-grid { grid-template-columns: repeat(3, 1fr); }
+		}
+	</style>
+</head>
+<body>
+	<a href="#main" class="skip">Skip to content</a>
+
+	<!-- NAV -->
+	<nav class="nav" role="navigation" aria-label="Main">
+		<div class="nav-inner">
+			<a href="#" class="nav-brand">piki</a>
+			<div class="nav-right">
+				<button class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+				</button>
+				<a class="nav-link" href="https://github.com/adrioui/piki">GitHub</a>
+				<a class="nav-link" href="https://www.npmjs.com/package/@piki/coding-agent">npm</a>
+				<a class="nav-link" href="https://github.com/adrioui/piki/tree/main/packages/coding-agent/docs">Docs</a>
+				<a class="nav-cta" href="#install">Get it now</a>
+			</div>
+		</div>
+	</nav>
+
+	<!-- HERO -->
+	<header class="hero" id="top">
+		<div class="hero-inner">
+			<h1 class="reveal">An agent harness for<br><span class="accent">coding, automation</span></h1>
+			<p class="hero-sub reveal" style="--d:80ms">Multi-provider AI, a worker runtime, an extension system, and a terminal UI — all wired together. Ships as a single CLI.</p>
+
+			<div class="hero-install reveal" style="--d:160ms">
+				<code><span class="dim">$ </span>npm install -g @piki/coding-agent</code>
+				<button class="copy-btn" data-cmd="npm install -g @piki/coding-agent" aria-label="Copy" title="Copy">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+				</button>
+			</div>
+
+			<p class="hero-meta reveal" style="--d:240ms">MIT &middot; macOS, Linux, Windows &middot; Node &ge; 22 &middot; <a href="https://github.com/adrioui/piki" style="color:var(--white-dim)">source</a></p>
+
+			<div class="stats reveal" style="--d:320ms">
+				<div><div class="stat-val">16</div><div class="stat-lbl">packages</div></div>
+				<div><div class="stat-val">37+</div><div class="stat-lbl">providers</div></div>
+				<div><div class="stat-val">9</div><div class="stat-lbl">roles</div></div>
+				<div><div class="stat-val">100%</div><div class="stat-lbl">TypeScript</div></div>
+			</div>
+		</div>
+	</header>
+
+	<!-- CANVAS -->
+	<div class="canvas" id="main">
+		<main>
+
+			<!-- ABOUT -->
+			<div class="section">
+				<div class="label reveal"><span class="num">&sect; 02</span> what is piki</div>
+				<h2 class="section-heading reveal" style="--d:60ms">The full picture</h2>
+				<div class="card reveal" style="--d:120ms">
+					<div class="about-body">
+						<p><strong>Piki is a TypeScript monorepo</strong> that builds an interactive coding agent, its runtime, model integrations, and terminal UI. It keeps the Pi harness foundation while adding branded packages, providers, worker runtime services, and event-core projections.</p>
+						<p>The primary output is <code>@piki/coding-agent</code> — a CLI that provides an interactive terminal-based coding agent capable of file reads and writes, search, shell execution, web fetch, task coordination, checkpoints, and restore flows. Built on <strong>Effect</strong>, every layer is composable and testable.</p>
+					</div>
+			 </div>
+			</div>
+
+			<!-- FEATURES -->
+			<div class="section">
+				<div class="label reveal"><span class="num">&sect; 03</span> features</div>
+				<h2 class="section-heading reveal" style="--d:60ms">What Piki ships with</h2>
+
+				<!-- Feature 1: Multi-Provider AI -->
+				<div class="feature-row reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x26A1;</div>
+						<h3>Multi-Provider AI</h3>
+						<p>Unified LLM API across OpenAI, Anthropic, Google, AWS Bedrock, Mistral, NVIDIA, Groq, Together, xAI, Cerebras, OpenRouter, and more. OAuth-backed providers with generated model catalogs.</p>
+						<span class="feature-tag">37+ providers</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="d">$</span> piki --list-models<br>
+								<span class="g">anthropic</span> claude-4-opus<br>
+								<span class="a">openai</span> gpt-5<br>
+								<span class="g">google</span> gemini-2.5-pro<br>
+								<span class="d">... 37+ providers</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Feature 2: Worker Runtime -->
+				<div class="feature-row reverse reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x2699;&#xFE0F;</div>
+						<h3>Worker Runtime</h3>
+						<p>Role-aware workers with lifecycle tracking, runtime events, scratchpads, and projection-backed state. Fan out tasks to isolated worker sessions for parallel execution.</p>
+						<span class="feature-tag">event-sourced</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="a">leader</span> dispatching tasks<br>
+								<span class="g">worker-1</span> reading files...<br>
+								<span class="g">worker-2</span> running tests...<br>
+								<span class="g">worker-3</span> writing docs...<br>
+								<span class="d">lifecycle: tracked</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Feature 3: Interactive TUI -->
+				<div class="feature-row reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x258C;&#x2590;</div>
+						<h3>Interactive TUI</h3>
+						<p>Full terminal UI with differential rendering, custom components, keybindings, kill-ring, undo stack, image display, and markdown rendering. Zero external UI dependencies.</p>
+						<span class="feature-tag">zero dependencies</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="g">┌─ piki ──────────</span><br>
+								<span class="d">│</span> <span class="a">&gt;</span> refactor auth<br>
+								<span class="d">│</span> <span class="g">thinking...</span><br>
+								<span class="d">│</span> editing src/auth.ts<br>
+								<span class="g">└────────────────</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Feature 4: Extension System -->
+				<div class="feature-row reverse reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x1F9E9;</div>
+						<h3>Extension System</h3>
+						<p>Load extensions from npm, git, or local paths. Custom tools, providers, renderers, permissions, prompts, compaction, and UI extensions. Fully pluggable architecture.</p>
+						<span class="feature-tag">pluggable</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="d">extensions loaded:</span><br>
+								<span class="g">+</span> plan-mode<br>
+								<span class="g">+</span> permission-gate<br>
+								<span class="g">+</span> subagent<br>
+								<span class="a">+ my-tool</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Feature 5: Permission Engine -->
+				<div class="feature-row reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x1F6E1;&#xFE0F;</div>
+						<h3>Permission Engine</h3>
+						<p>Guarded file paths, permission gates, safety classification for shell commands. Run with the permissions of the launching user. Configurable per-project policies.</p>
+						<span class="feature-tag">configurable</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="d">permission gate:</span><br>
+								<span class="g">ALLOW</span> src/**/*.ts<br>
+								<span class="a">REVIEW</span> rm -rf<br>
+								<span class="g">ALLOW</span> npm test<br>
+								<span class="d">guarded: node_modules</span>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Feature 6: Sessions -->
+				<div class="feature-row reverse reveal" style="--d:0ms">
+					<div class="feature-info">
+						<div class="feature-icon">&#x1F4BE;</div>
+						<h3>Session Management</h3>
+						<p>Snapshot and restore session state. Checkpoint at any point in the agent loop. Resume previous work across restarts with full context preservation.</p>
+						<span class="feature-tag">persistent</span>
+					</div>
+					<div class="feature-visual">
+						<div class="mock-terminal">
+							<div class="mock-bar"><span class="mock-dot"></span><span class="mock-dot"></span><span class="mock-dot"></span></div>
+							<div class="mock-body">
+								<span class="d">session:</span> <span class="a">#a3f2b1</span><br>
+								<span class="g">saved</span> checkpoint @step 14<br>
+								<span class="d">context:</span> 12k tokens<br>
+								<span class="g">restored</span> from snapshot
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- ARCHITECTURE -->
+			<div class="section">
+				<div class="label reveal"><span class="num">&sect; 04</span> architecture</div>
+				<h2 class="section-heading reveal" style="--d:60ms">16 packages. One coherent system.</h2>
+				<p class="section-desc reveal" style="--d:100ms">Every layer is a discrete, auditable package. The dependency graph fans out from the top-level CLI through the agent core, AI providers, event sourcing, and terminal UI.</p>
+
+				<div class="arch-grid">
+					<div class="arch-card core reveal"><div class="arch-pkg">@piki/coding-agent</div><div class="arch-desc">CLI, SDK, interactive TUI, extensions, themes</div></div>
+					<div class="arch-card core reveal"><div class="arch-pkg">@piki/agent-core</div><div class="arch-desc">Agent loop, harness runtime, workers</div></div>
+					<div class="arch-card core reveal"><div class="arch-pkg">@piki/ai</div><div class="arch-desc">Unified LLM API, provider catalog, streaming</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/event-core</div><div class="arch-desc">Event sourcing, projections, FSM, fork runtime</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/tui</div><div class="arch-desc">Terminal UI: components, keybindings, rendering</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/roles</div><div class="arch-desc">Role prompts and policies for 9 agent roles</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/skills</div><div class="arch-desc">Skill loading, frontmatter, discovery</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/storage</div><div class="arch-desc">Global, project, session, memory storage</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/vcs</div><div class="arch-desc">Shadow VCS — git checkpoint system</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/ripgrep</div><div class="arch-desc">In-process ripgrep: binary resolution</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">@piki/tracing</div><div class="arch-desc">Telemetry trace writer</div></div>
+					<div class="arch-card reveal"><div class="arch-pkg">+ 5 more</div><div class="arch-desc">scratchpad, harness, logger, generate-id, shell-classifier</div></div>
+				</div>
+			</div>
+
+			<!-- INSTALL -->
+			<div class="section" id="install">
+				<div class="label reveal"><span class="num">&sect; 05</span> install</div>
+				<h2 class="section-heading reveal" style="--d:60ms">Get started</h2>
+
+				<div class="install-grid">
+					<div class="install-card reveal">
+						<h3>npm <span class="badge">recommended</span></h3>
+						<div class="install-code">
+							<span>npm install -g @piki/coding-agent</span>
+							<button class="copy-btn" data-cmd="npm install -g @piki/coding-agent" aria-label="Copy">
+								<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+							</button>
+						</div>
+						<span class="install-platforms">macOS &middot; Linux &middot; Windows &middot; Node &ge; 22</span>
+					</div>
+
+					<div class="install-card reveal">
+						<h3>bun</h3>
+						<div class="install-code">
+							<span>bun install -g @piki/coding-agent</span>
+							<button class="copy-btn" data-cmd="bun install -g @piki/coding-agent" aria-label="Copy">
+								<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+							</button>
+						</div>
+						<span class="install-platforms">macOS &middot; Linux &middot; Windows</span>
+					</div>
+				</div>
+			</div>
+
+			<!-- DEVELOPMENT -->
+			<div class="section">
+				<div class="label reveal"><span class="num">&sect; 06</span> development</div>
+				<h2 class="section-heading reveal" style="--d:60ms">Build from source</h2>
+				<p class="section-desc reveal" style="--d:100ms">Piki uses npm workspaces, TypeScript strict mode, Biome for linting, and Vitest for testing.</p>
+
+				<div class="dev-steps reveal" style="--d:180ms">
+					<div class="dev-step"><span class="n">01</span>git clone https://github.com/adrioui/piki.git &amp;&amp; cd piki</div>
+					<div class="dev-step"><span class="n">02</span>npm install --ignore-scripts</div>
+					<div class="dev-step"><span class="n">03</span>npm run check</div>
+					<div class="dev-step"><span class="n">04</span>./test.sh</div>
+				</div>
+			</div>
+
+		</main>
+	</div>
+
+	<!-- FOOTER -->
+	<footer class="footer">
+		<div class="footer-inner">
+			<div>
+				<div class="footer-brand">piki</div>
+				<div class="footer-copy">&copy; 2026 &middot; MIT License</div>
+			</div>
+			<nav class="footer-links" aria-label="Footer">
+				<a href="https://github.com/adrioui/piki">GitHub</a>
+				<a href="https://www.npmjs.com/package/@piki/coding-agent">npm</a>
+				<a href="https://github.com/adrioui/piki/blob/main/CONTRIBUTING.md">Contributing</a>
+				<a href="https://github.com/adrioui/piki/blob/main/LICENSE">License</a>
+			</nav>
+		</div>
+	</footer>
+
+	<script>
+		/* Scroll reveal */
+		(function() {
+			if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+			var obs = new IntersectionObserver(function(entries) {
+				for (var i = 0; i < entries.length; i++) {
+					if (entries[i].isIntersecting) {
+						entries[i].target.classList.add('in');
+						obs.unobserve(entries[i].target);
+					}
+				}
+			}, { threshold: 0.08, rootMargin: '0px 0px -30px 0px' });
+			var els = document.querySelectorAll('.reveal');
+			for (var j = 0; j < els.length; j++) obs.observe(els[j]);
+		})();
+
+		/* Copy to clipboard */
+		(function() {
+			var checkSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+			var copySvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+			var btns = document.querySelectorAll('.copy-btn');
+			for (var i = 0; i < btns.length; i++) {
+				btns[i].addEventListener('click', function() {
+					var cmd = this.getAttribute('data-cmd');
+					if (!cmd) return;
+					var btn = this;
+					navigator.clipboard.writeText(cmd).then(function() {
+						btn.classList.add('copied');
+						btn.innerHTML = checkSvg;
+						setTimeout(function() { btn.classList.remove('copied'); btn.innerHTML = copySvg; }, 1500);
+					});
+				});
+			}
+		})();
+
+		/* Mobile nav */
+		(function() {
+			var toggle = document.querySelector('.nav-toggle');
+			var links = document.querySelector('.nav-right');
+			if (!toggle) return;
+			toggle.addEventListener('click', function() {
+				var open = links.classList.toggle('nav-links-open');
+				toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+			});
+			var anchors = links.querySelectorAll('a');
+			for (var i = 0; i < anchors.length; i++) {
+				anchors[i].addEventListener('click', function() {
+					links.classList.remove('nav-links-open');
+					toggle.setAttribute('aria-expanded', 'false');
+				});
+			}
+		})();
+	</script>
+</body>
+</html>
