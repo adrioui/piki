@@ -40,7 +40,7 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	together: "moonshotai/Kimi-K2.6",
 	opencode: "kimi-k2.6",
 	"opencode-go": "kimi-k2.6",
-	"kimi-coding": "kimi-for-coding",
+	"kimi-coding": "kimi-for-coding-highspeed",
 	"cloudflare-workers-ai": "@cf/moonshotai/kimi-k2.6",
 	"cloudflare-ai-gateway": "workers-ai/@cf/moonshotai/kimi-k2.6",
 	clinepass: "cline-pass/glm-5.2",
@@ -49,8 +49,6 @@ export const defaultModelPerProvider: Record<KnownProvider, string> = {
 	"xiaomi-token-plan-cn": "mimo-v2.5-pro",
 	"xiaomi-token-plan-ams": "mimo-v2.5-pro",
 	"xiaomi-token-plan-sgp": "mimo-v2.5-pro",
-	sakana: "fugu",
-	qwencloud: "qwen-plus",
 };
 
 export interface ScopedModel {

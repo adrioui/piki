@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@piki/ai";
+import type { Api, AssistantMessage, Model } from "@piki/ai";
 import { describe, expect, it } from "vitest";
 import {
 	collectCacheMisses,
@@ -10,9 +10,25 @@ import type { SessionEntry } from "../src/core/session-manager.ts";
 
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
+/** Build a minimal valid Model used only for its cache-read $/M price. */
+function makeModel(cacheRead: number): Model<Api> {
+	return {
+		id: "test-model",
+		name: "Test Model",
+		api: "openai-responses",
+		provider: "test",
+		baseUrl: "https://example.invalid",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead, cacheWrite: 0 },
+		contextWindow: 200_000,
+		maxTokens: 8_192,
+	};
+}
+
 const models: ModelPriceSource = {
 	// $/million tokens; used as cache-read price fallback on full-miss turns
-	find: () => ({ cost: { cacheRead: 0.3 } }),
+	find: () => makeModel(0.3),
 };
 
 function assistant(options: {

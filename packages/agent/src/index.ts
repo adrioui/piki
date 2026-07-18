@@ -2,6 +2,8 @@
 export * from "./agent.ts";
 // Loop functions
 export * from "./agent-loop.ts";
+// Constants
+export * from "./constants.ts";
 export * from "./harness/agent-harness.ts";
 export {
 	type BranchPreparation,
@@ -48,7 +50,7 @@ export * from "./projections/worker-activity.ts";
 export * from "./proxy.ts";
 // Roles
 export * from "./roles/task-worker-role.ts";
-// Truncation
-export { renderXmlBodyValue } from "./truncation/xml-body.ts";
+// Tool error classification
+export * from "./tool-errors.ts";
 // Types
 export * from "./types.ts";

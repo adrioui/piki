@@ -6,7 +6,11 @@
  * Default deny when no rule matches in headless/execute contexts.
  */
 
-import { classifyShellCommand } from "./shell-classifier.ts";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
+
+import { expandScratchpadPath } from "@piki/scratchpad";
+import { classifyShellCommand, isGitMutation, isPathWithin, writesStayWithin } from "./shell-classifier.ts";
 
 export type PermissionAction = "allow" | "reject" | "ask" | "delegate";
 
@@ -50,6 +54,30 @@ export interface PermissionGateOptions {
 	interactive?: boolean;
 	/** Context kind: "thread" or "subagent". */
 	context?: "thread" | "subagent";
+	/**
+	 * When true, forbidden/mass-destructive shell classification and the
+	 * destructive built-in rules (destructive git, recursive rm, chmod -R 777)
+	 * are allowed. Mirrors Magnitude alpha22 `--disable-shell-safeguards`.
+	 * Default: false (safeguards active, default-deny).
+	 */
+	disableShellSafeguards?: boolean;
+	/**
+	 * When true, the shell write-boundary (alpha22 `denyWritesOutside`) is
+	 * disabled independently of `disableShellSafeguards`. Mirrors Magnitude
+	 * alpha22 `--disable-cwd-safeguards`, which only lifts the cwd write
+	 * boundary and leaves git/forbidden/mass-destructive blocking intact.
+	 * Default: false (boundary active).
+	 */
+	disableCwdSafeguards?: boolean;
+	/**
+	 * Current working directory of the session. When provided (with or without
+	 * scratchpadPath) the gate enforces Magnitude alpha22's shell write-boundary:
+	 * shell redirects / write-path command args must resolve inside
+	 * [cwd, scratchpadPath, ~/.piki]. Mirrors alpha22 `denyWritesOutside`.
+	 */
+	cwd?: string;
+	/** Scratchpad path of the session. See `cwd`. */
+	scratchpadPath?: string;
 	/**
 	 * Tool names that are registered/known to the runtime. When no rule matches,
 	 * known tools are allowed by default so the gate only blocks unregistered
@@ -205,37 +233,17 @@ const BUILT_IN_RULES: PermissionRule[] = [
 	{ tool: "scratchpad_save", action: "allow" },
 	{ tool: "compact", action: "allow" },
 
-	// Deny destructive git operations in bash
-	{
-		tool: "bash",
-		action: "reject",
-		matches: { command: "/git reset --hard/" },
-		message: "Destructive git reset blocked",
-	},
-	{
-		tool: "bash",
-		action: "reject",
-		matches: { command: "/git clean .*-(?:[^\\s]*f[^\\s]*d|[^\\s]*d[^\\s]*f)/" },
-		message: "Destructive git clean blocked",
-	},
-	{
-		tool: "bash",
-		action: "reject",
-		matches: { command: "/git commit .*--no-verify/" },
-		message: "Bypassing git commit hooks is blocked",
-	},
-	{
-		tool: "bash",
-		action: "reject",
-		matches: { command: "/git push .*(?:-f|--force|--force-with-lease)/" },
-		message: "Destructive git push blocked",
-	},
-	{ tool: "bash", action: "reject", matches: { command: "/git stash/" }, message: "Destructive git stash blocked" },
-	{ tool: "bash", action: "reject", matches: { command: "/git add -A/" }, message: "Destructive git add blocked" },
-	{ tool: "bash", action: "reject", matches: { command: "/git add \\./" }, message: "Destructive git add blocked" },
-	{ tool: "bash", action: "reject", matches: { command: "/rm -rf \\//" }, message: "Recursive rm blocked" },
-	{ tool: "bash", action: "reject", matches: { command: "/rm -rf ~/" }, message: "Recursive rm blocked" },
-	{ tool: "bash", action: "reject", matches: { command: "/chmod -R 777/" }, message: "Permissive chmod blocked" },
+	// Deny recursive rm of root/home and permissive chmod. Mutating git is
+	// blocked separately by the broad `isGitMutation` classifier in
+	// evaluatePermission (so all non-read-only git subcommands are denied, not
+	// just the few enumerated below).
+	// NOTE: Recursive rm of absolute/home paths and permissive chmod are NOT
+	// statically rejected here. Magnitude alpha22 (`denyMassDestructiveIn`) only
+	// blocks mass-destructive commands that escape the protected roots
+	// [cwd, scratchpadPath, ~/.piki] (and `~` itself is outside that set, so it
+	// is allowed — matching alpha22's `~/.magnitude` protected root). The
+	// `chmod -R 777` case is already caught by the shell classifier
+	// (`classifyShellCommand` → forbidden), so no static rule is needed.
 
 	// Allow mutating file tools (guarded-path policy blocks sensitive targets)
 	{ tool: "write", action: "allow" },
@@ -243,7 +251,7 @@ const BUILT_IN_RULES: PermissionRule[] = [
 	{ tool: "edit-diff", action: "allow" },
 
 	// Allow bash for general commands (after dangerous patterns are rejected)
-	{ tool: "bash", action: "allow" },
+	{ tool: "/^(bash|shell)$/", action: "allow" },
 ];
 
 /**
@@ -295,20 +303,156 @@ export function evaluatePermission(
 		}
 	}
 
-	if (toolName === "bash" && typeof input.command === "string") {
-		const shellClassification = classifyShellCommand(input.command);
-		if (shellClassification.level === "forbidden" || shellClassification.level === "mass-destructive") {
-			return {
-				permitted: false,
-				action: "reject",
-				reason: shellClassification.reason,
-				source: "built-in",
-			};
+	// Dynamic write/edit/edit-diff cwd boundary (alpha22 `denyWritesOutside`).
+	// A static `matches.path` regex cannot resolve `../`/`./` and `$M` against
+	// cwd, so the boundary is enforced here, mirroring mag's `writeTool.execute`
+	// + `expandScratchpadPath` + `isPathWithin`. Applies only when a role policy
+	// context is active (leader passes `roleId:"leader"`, workers pass
+	// `roleId: <role>`) and the cwd/scratchpad roots exist. `disableCwdSafeguards`
+	// lifts it independently of `disableShellSafeguards`.
+	if (
+		!options.disableCwdSafeguards &&
+		options.roleId &&
+		(typeof options.cwd === "string" || typeof options.scratchpadPath === "string")
+	) {
+		const writeBoundaryRoots = [options.cwd, options.scratchpadPath, `${homedir()}/.piki`].filter(
+			(root): root is string => Boolean(root),
+		);
+		const writeBoundaryEnv: Record<string, string> = {
+			...process.env,
+			HOME: process.env.HOME ?? homedir(),
+			M: options.scratchpadPath ?? "",
+			PROJECT_ROOT: options.cwd ?? "",
+		};
+		if (toolName === "write" || toolName === "edit" || toolName === "edit-diff") {
+			const rawPath = typeof input.path === "string" ? input.path : "";
+			const { path: expanded } = expandScratchpadPath(rawPath, options.scratchpadPath ?? "");
+			const fullPath = resolve(options.cwd ?? process.cwd(), expanded);
+			if (!isPathWithin(fullPath, writeBoundaryEnv, ...writeBoundaryRoots)) {
+				return {
+					permitted: false,
+					action: "reject",
+					reason: "Cannot write files outside allowed directories",
+					source: "role",
+				};
+			}
 		}
 	}
 
-	for (let i = 0; i < BUILT_IN_RULES.length; i++) {
-		const rule = BUILT_IN_RULES[i]!;
+	if ((toolName === "bash" || toolName === "shell") && typeof input.command === "string") {
+		const command = String(input.command);
+		// Shell safeguards (git/forbidden/mass-destructive) are gated by
+		// `disableShellSafeguards` (alpha22 `--disable-shell-safeguards`).
+		if (!options.disableShellSafeguards) {
+			const shellClassification = classifyShellCommand(command);
+			if (shellClassification.level === "forbidden") {
+				return {
+					permitted: false,
+					action: "reject",
+					reason: shellClassification.reason,
+					source: "built-in",
+				};
+			}
+			// T3: mass-destructive ops follow alpha22's `denyMassDestructiveIn`
+			// two-phase model. Magnitude allows a mass-destructive command when
+			// it stays within the non-protected roots [cwd, scratchpadPath]
+			// (using the non-strict `writesStayWithin`, which honors the /tmp and
+			// /dev/null outside-prefix exemptions), and only rejects it when it
+			// escapes those roots but STILL stays within the protected root
+			// (~/.piki, the piki rebrand of alpha22's ~/.magnitude). Commands
+			// that escape ALL roots fall through to the cwd write-boundary
+			// (denyWritesOutside) below, matching alpha22's ordering.
+			if (shellClassification.level === "mass-destructive") {
+				const pikiHome = `${homedir()}/.piki`;
+				// Phase 1: non-protected roots (cwd + scratchpad). When cwd is
+				// unset, fall back to process.cwd() so the boundary has a concrete
+				// primary root (mirrors mag's `writesStayWithin` `allowedRoots[0]
+				// ?? process.cwd()` fallback — never pass `undefined` as a root).
+				// The protected ~/.piki root is intentionally NOT included here,
+				// so `rm -rf ~/.piki/x` is not allowed by phase 1.
+				const cwdRoot = options.cwd ?? process.cwd();
+				const nonProtectedRoots: string[] = [cwdRoot];
+				if (typeof options.scratchpadPath === "string") nonProtectedRoots.push(options.scratchpadPath);
+				const massEnv: Record<string, string> = {
+					...process.env,
+					HOME: process.env.HOME ?? homedir(),
+					M: options.scratchpadPath ?? "",
+					PROJECT_ROOT: options.cwd ?? "",
+				};
+				if (writesStayWithin(command, massEnv, ...nonProtectedRoots)) {
+					return {
+						permitted: true,
+						action: "allow",
+						reason: "Mass-destructive allowed within session roots",
+						source: "built-in",
+					};
+				}
+				// Phase 2: escapes non-protected roots but stays within the
+				// protected root (~/.piki) → rejected.
+				const allRoots = [...nonProtectedRoots, pikiHome];
+				if (writesStayWithin(command, massEnv, ...allRoots)) {
+					return {
+						permitted: false,
+						action: "reject",
+						reason: "Mass-destructive operations are not allowed in protected directories",
+						source: "built-in",
+					};
+				}
+				// Otherwise escapes all roots → fall through to the cwd
+				// write-boundary (denyWritesOutside) below.
+			}
+			// Block all mutating git commands (alpha22 denies any non-read-only git).
+			if (isGitMutation(command)) {
+				return {
+					permitted: false,
+					action: "reject",
+					reason: "Only read-only git commands are allowed",
+					source: "built-in",
+				};
+			}
+		}
+		// T2: the shell write-boundary (alpha22 `denyWritesOutside`) is gated by
+		// the INDEPENDENT `disableCwdSafeguards` flag, not by
+		// `disableShellSafeguards`. This matches alpha22 where cwd-boundary and
+		// shell-safeguard toggles are separate.
+		if (
+			!options.disableCwdSafeguards &&
+			(typeof options.cwd === "string" || typeof options.scratchpadPath === "string")
+		) {
+			const roots = [options.cwd, options.scratchpadPath, `${homedir()}/.piki`].filter((root): root is string =>
+				Boolean(root),
+			);
+			const shellEnv: Record<string, string> = {
+				...process.env,
+				HOME: process.env.HOME ?? homedir(),
+				M: options.scratchpadPath ?? "",
+				PROJECT_ROOT: options.cwd ?? "",
+			};
+			if (!writesStayWithin(command, shellEnv, ...roots)) {
+				return {
+					permitted: false,
+					action: "reject",
+					reason: "Command targets paths outside allowed directories",
+					source: "built-in",
+				};
+			}
+		}
+	}
+
+	// T2/G1 write/edit/edit-diff cwd write-boundary: now enforced solely by the
+	// two-step resolver block earlier in this function (the `expandScratchpadPath`
+	// + `resolve(cwd, expanded)` + `isPathWithin` check that mirrors Magnitude
+	// alpha22 `denyWritesOutside`). The previous second raw-path `isPathWithin`
+	// check has been removed — it tilde-expanded `~/x` to `$HOME/x` and rejected
+	// mag-equivalent writes, diverging from Magnitude which keeps `~` literal as
+	// `<cwd>/~/x`. The earlier block already covers this case with mag-parity
+	// resolution, so no standalone re-check is needed here.
+
+	const builtInRules = options.disableShellSafeguards
+		? BUILT_IN_RULES.filter((rule) => !(rule.action === "reject" && rule.tool === "/^(bash|shell)$/"))
+		: BUILT_IN_RULES;
+	for (let i = 0; i < builtInRules.length; i++) {
+		const rule = builtInRules[i]!;
 		if (ruleMatches(rule, toolName, input, contextKind)) {
 			return {
 				permitted: rule.action === "allow",

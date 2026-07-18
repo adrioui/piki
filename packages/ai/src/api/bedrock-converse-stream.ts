@@ -946,8 +946,19 @@ function mapStopReason(reason: string | undefined): { stopReason: StopReason; er
 			return { stopReason: "length" };
 		case BedrockStopReason.TOOL_USE:
 			return { stopReason: "toolUse" };
+		// mag surfaces `content_filter` (guardrail intervention) as a graceful
+		// (non-error) terminal outcome (ContentFiltered). piki has a dedicated
+		// "contentFiltered" StopReason variant, so map CONTENT_FILTERED directly
+		// to it (preserving the raw finish_reason through to the outcome rather
+		// than collapsing to "stop"). Unknown reasons are mapped to a graceful
+		// "stop" rather than erroring.
+		case BedrockStopReason.CONTENT_FILTERED:
+			return { stopReason: "contentFiltered" };
 		default:
-			return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
+			// Unknown stop reasons are mapped to a graceful "stop" rather than
+			// "error", matching mag's behavior of completing the turn as a
+			// terminal outcome for reasons it does not recognize.
+			return { stopReason: "stop" };
 	}
 }
 

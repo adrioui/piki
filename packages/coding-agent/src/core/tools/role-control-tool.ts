@@ -33,44 +33,53 @@ function errorResult(message: string): AgentToolResult<unknown> {
 type RoleToolHandler = (runtime: ForkRuntime, params: Record<string, unknown>) => Promise<AgentToolResult<unknown>>;
 
 const TOOL_HANDLERS: Record<string, RoleToolHandler> = {
-	spawnWorker: async (rt, p) => {
+	spawn_worker: async (rt, p) => {
 		const result = await rt.spawnWorker({
 			role: String(p.role ?? ""),
 			message: p.message as string | undefined,
 			taskId: p.taskId as string | undefined,
-			context: p.context as string | undefined,
+			agentId: p.agentId as string | undefined,
+			yield: p.yield as boolean | undefined,
 		});
 		return success(`Spawned worker ${result.agentId} (fork ${result.forkId})`, {
 			...result,
 			workerId: result.agentId,
 		});
 	},
-	messageWorker: async (rt, p) => {
-		await rt.messageWorker({ workerId: String(p.workerId ?? ""), message: String(p.message ?? "") });
-		return success(`Messaged worker ${p.workerId}`);
+	message_worker: async (rt, p) => {
+		await rt.messageWorker({
+			workerId: String(p.agentId ?? ""),
+			message: String(p.message ?? ""),
+			yield: p.yield as boolean | undefined,
+		});
+		return success(`Messaged worker ${p.agentId}`);
 	},
-	killWorker: async (rt, p) => {
-		await rt.killWorker({ workerId: String(p.workerId ?? ""), reason: p.reason as string | undefined });
-		return success(`Killed worker ${p.workerId}`);
+	kill_worker: async (rt, p) => {
+		const workerId = rt.workerIdForTask(String(p.taskId ?? ""));
+		if (!workerId) {
+			return errorResult(`No worker found for task ${p.taskId}`);
+		}
+		await rt.killWorker({ workerId, reason: p.reason as string | undefined });
+		return success(`Killed worker for task ${p.taskId} (${workerId})`);
 	},
-	createTask: async (rt, p) => {
+	create_task: async (rt, p) => {
 		const result = await rt.createTask({
+			taskId: String(p.taskId ?? ""),
 			title: String(p.title ?? p.message ?? ""),
-			description: p.description as string | undefined,
-			parentId: p.parentId as string | undefined,
-			assignee: p.assignee as string | undefined,
+			parentId: p.parent as string | undefined,
+			after: p.after as string | undefined,
 		});
 		return success(`Created task ${result.taskId}`, result);
 	},
-	updateTask: async (rt, p) => {
+	update_task: async (rt, p) => {
 		await rt.updateTask({
 			taskId: String(p.taskId ?? ""),
-			status: p.status as "pending" | "working" | "completed" | "cancelled",
+			status: p.status as "pending" | "completed" | "cancelled",
 		});
 		return success(`Updated task ${p.taskId}`);
 	},
-	finishGoal: async (rt, p) => {
-		await rt.finishGoal({ goalText: p.goalText as string | undefined, evidence: p.evidence as string | undefined });
+	finish_goal: async (rt, p) => {
+		await rt.finishGoal({ evidence: p.evidence as string | undefined });
 		return success("Goal completion requested. Verification in progress — you will be notified of the result.");
 	},
 	pass: async (rt, p) => {
@@ -81,57 +90,57 @@ const TOOL_HANDLERS: Record<string, RoleToolHandler> = {
 		await rt.escalate({ justification: String(p.justification ?? ""), message: p.message as string | undefined });
 		return success("Escalation requested");
 	},
-	reassignWorker: async (rt, p) => {
-		await rt.reassignWorker({ taskId: String(p.taskId ?? ""), workerId: String(p.workerId ?? "") });
-		return success(`Reassigned task ${p.taskId} to ${p.workerId}`);
+	reassign_worker: async (rt, p) => {
+		await rt.reassignWorker({ taskId: String(p.taskId ?? ""), workerId: String(p.agentId ?? "") });
+		return success(`Reassigned task ${p.taskId} to ${p.agentId}`);
 	},
-	messageAdvisor: async (rt, p) => {
+	message_advisor: async (rt, p) => {
 		await rt.messageAdvisor({ message: String(p.message ?? "") });
 		return success("Message sent to advisor");
 	},
 };
 
 const TOOL_SCHEMAS: Record<string, ReturnType<typeof Type.Object>> = {
-	spawnWorker: Type.Object({
-		role: Type.Union(
-			[
-				Type.Literal("scout"),
-				Type.Literal("architect"),
-				Type.Literal("engineer"),
-				Type.Literal("critic"),
-				Type.Literal("scientist"),
-				Type.Literal("artisan"),
-			],
-			{ description: "Role to spawn" },
+	spawn_worker: Type.Object({
+		role: Type.String({
+			description: "Worker role (e.g., engineer, scout, architect, critic, scientist, artisan).",
+		}),
+		message: Type.String({ description: "Initial message/task for the worker" }),
+		taskId: Type.String({
+			description: "Task ID to assign to the worker (the runtime associates the worker with this task).",
+		}),
+		agentId: Type.String({
+			description: "Unique agent ID for the worker",
+		}),
+		yield: Type.Optional(
+			Type.Boolean({ description: "Set true to yield the leader turn to this worker before continuing" }),
 		),
-		message: Type.Optional(Type.String({ description: "Initial message/task for the worker" })),
-		taskId: Type.Optional(Type.String({ description: "Task ID to assign to the worker" })),
-		context: Type.Optional(Type.String({ description: "Additional context for the worker" })),
 	}),
-	messageWorker: Type.Object({
-		workerId: Type.String({ description: "ID of the worker to message" }),
+	message_worker: Type.Object({
+		agentId: Type.String({ description: "ID of the worker to message" }),
 		message: Type.String({ description: "Message to send to the worker" }),
+		yield: Type.Optional(
+			Type.Boolean({ description: "When true, yield to this worker — the leader turn will not retrigger." }),
+		),
 	}),
-	killWorker: Type.Object({
-		workerId: Type.String({ description: "ID of the worker to kill" }),
+	kill_worker: Type.Object({
+		taskId: Type.String({ description: "Task ID whose worker to kill" }),
 		reason: Type.Optional(Type.String({ description: "Reason for killing the worker" })),
 	}),
-	createTask: Type.Object({
+	create_task: Type.Object({
+		taskId: Type.String({ description: "Task ID to assign to the created task" }),
 		title: Type.String({ description: "Task title" }),
-		description: Type.Optional(Type.String({ description: "Task description or context" })),
-		parentId: Type.Optional(Type.String({ description: "Parent task ID for subtasks" })),
-		assignee: Type.Optional(Type.String({ description: "Worker ID to assign the task to" })),
+		parent: Type.Optional(Type.String({ description: "Parent task ID for subtasks" })),
+		after: Type.Optional(Type.String({ description: "Task ID this task depends on (run after)" })),
 	}),
-	updateTask: Type.Object({
+	update_task: Type.Object({
 		taskId: Type.String({ description: "Task ID to update" }),
-		status: Type.Union(
-			[Type.Literal("pending"), Type.Literal("working"), Type.Literal("completed"), Type.Literal("cancelled")],
-			{ description: "New task status" },
-		),
+		status: Type.Union([Type.Literal("pending"), Type.Literal("completed"), Type.Literal("cancelled")], {
+			description: "New task status",
+		}),
 	}),
-	finishGoal: Type.Object({
-		goalText: Type.Optional(Type.String({ description: "The goal that was finished" })),
-		evidence: Type.Optional(Type.String({ description: "Evidence that the goal was achieved" })),
+	finish_goal: Type.Object({
+		evidence: Type.String({ description: "Evidence that the goal was achieved" }),
 	}),
 	pass: Type.Object({
 		message: Type.Optional(Type.String({ description: "Reason for passing" })),
@@ -140,26 +149,26 @@ const TOOL_SCHEMAS: Record<string, ReturnType<typeof Type.Object>> = {
 		justification: Type.String({ description: "Why escalation is needed" }),
 		message: Type.Optional(Type.String({ description: "Additional context for the escalation" })),
 	}),
-	reassignWorker: Type.Object({
+	reassign_worker: Type.Object({
 		taskId: Type.String({ description: "Task ID to reassign" }),
-		workerId: Type.String({ description: "Worker ID to assign the task to" }),
+		agentId: Type.String({ description: "Agent ID to assign the task to" }),
 	}),
-	messageAdvisor: Type.Object({
+	message_advisor: Type.Object({
 		message: Type.String({ description: "Message to send to the advisor" }),
 	}),
 };
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
-	spawnWorker: "Spawn an event-core worker agent with a specific role.",
-	messageWorker: "Send a message to a running worker agent.",
-	killWorker: "Kill a running worker agent.",
-	createTask: "Create a new task in the task graph.",
-	updateTask: "Update a task's status in the task graph.",
-	finishGoal: "Mark the current goal as finished with evidence.",
+	spawn_worker: "Spawn an event-core worker agent with a specific role.",
+	message_worker: "Send a message to a running worker agent.",
+	kill_worker: "Kill a running worker agent.",
+	create_task: "Create a new task in the task graph.",
+	update_task: "Update a task's status in the task graph.",
+	finish_goal: "Mark the current goal as finished with evidence.",
 	pass: "Pass the current turn without taking action.",
 	escalate: "Escalate to the observer/advisor for help.",
-	reassignWorker: "Reassign a task to a different worker.",
-	messageAdvisor: "Send a message to the advisor role.",
+	reassign_worker: "Reassign a task to a different worker.",
+	message_advisor: "Send a message to the advisor role.",
 };
 
 /**

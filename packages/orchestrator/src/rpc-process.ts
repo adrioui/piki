@@ -34,8 +34,8 @@ export class RpcProcessInstance {
 	private readonly exitListeners = new Set<(error?: Error) => void>();
 	private uiRequestHandler: ((request: RpcExtensionUIRequest) => void) | undefined;
 
-	constructor(options: { cwd: string }) {
-		const rpcCommand = this.getSpawnCommand();
+	constructor(options: { cwd: string; provider?: string; model?: string }) {
+		const rpcCommand = this.getSpawnCommand(options);
 		this.process = spawn(rpcCommand.command, rpcCommand.args, {
 			cwd: options.cwd,
 			env: process.env,
@@ -47,16 +47,23 @@ export class RpcProcessInstance {
 		this.attachListeners();
 	}
 
-	private getSpawnCommand(): { command: string; args: string[] } {
+	private getSpawnCommand(options: { provider?: string; model?: string }): { command: string; args: string[] } {
+		const args: string[] = ["--mode", "rpc"];
+		if (options.provider !== undefined) {
+			args.push("--provider", options.provider);
+		}
+		if (options.model !== undefined) {
+			args.push("--model", options.model);
+		}
 		if (isBunBinary) {
 			return {
 				command: join(dirname(process.execPath), process.platform === "win32" ? "pi.exe" : "pi"),
-				args: ["--mode", "rpc"],
+				args,
 			};
 		}
 		return {
 			command: process.execPath,
-			args: [require.resolve("@piki/coding-agent/rpc-entry")],
+			args: [require.resolve("@piki/coding-agent/rpc-entry"), ...args],
 		};
 	}
 
@@ -99,7 +106,15 @@ export class RpcProcessInstance {
 	}
 
 	private handleLine(line: string): void {
-		const parsed = JSON.parse(line) as { type?: string; id?: string };
+		let parsed: { type?: string; id?: string };
+		try {
+			parsed = JSON.parse(line) as { type?: string; id?: string };
+		} catch {
+			// Stray non-JSON line (e.g. a log line leaked to stdout). Skip it;
+			// a crash here would take down the whole orchestrator daemon.
+			process.stderr.write(`[orchestrator] skipping non-JSON RPC line: ${line.slice(0, 200)}\n`);
+			return;
+		}
 		switch (parsed.type) {
 			case "response": {
 				if (!parsed.id) {
@@ -190,12 +205,37 @@ export class RpcProcessInstance {
 			return;
 		}
 		this.process.kill("SIGTERM");
-		await new Promise<void>((resolve) => {
-			this.process.once("exit", () => resolve());
+		const exited = await new Promise<boolean>((resolve) => {
+			let settled = false;
+			const onExit = () => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				resolve(true);
+			};
+			this.process.once("exit", onExit);
+			setTimeout(() => {
+				if (settled) {
+					return;
+				}
+				settled = true;
+				resolve(false);
+			}, 5000);
 		});
+		if (!exited) {
+			this.process.kill("SIGKILL");
+			await new Promise<void>((resolve) => {
+				this.process.once("exit", () => resolve());
+			});
+		}
 	}
 }
 
-export function createRpcProcessInstance(options: { cwd: string }): RpcProcessInstance {
+export function createRpcProcessInstance(options: {
+	cwd: string;
+	provider?: string;
+	model?: string;
+}): RpcProcessInstance {
 	return new RpcProcessInstance(options);
 }

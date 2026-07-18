@@ -8,6 +8,7 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import {
 	createCheckpointId,
 	createSnapshot,
+	DEFAULT_SNAPSHOT_RETENTION,
 	diffSnapshotAgainstWorktree,
 	resolveSnapshotSelector,
 	restoreSnapshot,
@@ -75,7 +76,7 @@ export function createRestoreSnapshotToolDefinition(
 					}
 				}
 				const redoSnapshotId = createCheckpointId("redo");
-				const redoTreeOID = createSnapshot(cwd, sessionId, redoSnapshotId);
+				const redoTreeOID = createSnapshot(cwd, sessionId, redoSnapshotId, DEFAULT_SNAPSHOT_RETENTION);
 				restoreSnapshot(cwd, snapshot.treeOID, params.path);
 				return {
 					content: [

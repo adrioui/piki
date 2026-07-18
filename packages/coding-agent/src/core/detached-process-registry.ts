@@ -10,6 +10,24 @@ export interface DetachedProcessEntry {
 	outputPath?: string;
 }
 
+/**
+ * Tracks the SIGKILL fallback timers armed by killAll, keyed by PID. Prevents
+ * the 2000ms setTimeout from leaking or keeping the event loop alive after a
+ * process is gone. Mirrors mag's per-PID kill-timer tracking.
+ */
+const killTimersByPid = new Map<number, ReturnType<typeof setTimeout>>();
+
+/**
+ * Clear the SIGKILL fallback timer for a PID (if any). Safe to call when no
+ * timer is registered for the PID.
+ */
+export function clearKillTimer(pid: number): void {
+	const timer = killTimersByPid.get(pid);
+	if (timer === undefined) return;
+	clearTimeout(timer);
+	killTimersByPid.delete(pid);
+}
+
 export class DetachedProcessRegistry {
 	private readonly processes = new Map<number, DetachedProcessEntry>();
 	private readonly byFork = new Map<string, Set<number>>();
@@ -31,6 +49,7 @@ export class DetachedProcessRegistry {
 	}
 
 	unregister(pid: number): void {
+		clearKillTimer(pid);
 		const entry = this.processes.get(pid);
 		if (!entry) return;
 		this.processes.delete(pid);
@@ -41,11 +60,23 @@ export class DetachedProcessRegistry {
 		const pids = this.byFork.get(forkId);
 		if (!pids) return;
 		for (const pid of pids) {
+			// Send SIGTERM first to allow graceful shutdown/flush, then arm a
+			// SIGKILL fallback after a 2000ms grace period (matching mag).
 			try {
 				process.kill(pid, "SIGTERM");
 			} catch {
-				// Process may have already exited
+				// Already dead; nothing to signal
 			}
+			clearKillTimer(pid);
+			const timer = setTimeout(() => {
+				killTimersByPid.delete(pid);
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					// Process already gone
+				}
+			}, 2000);
+			killTimersByPid.set(pid, timer);
 			this.processes.delete(pid);
 		}
 		this.byFork.delete(forkId);
@@ -60,6 +91,9 @@ export class DetachedProcessRegistry {
 	dispose(): void {
 		for (const [forkId] of this.byFork) {
 			this.killAll(forkId);
+		}
+		for (const pid of killTimersByPid.keys()) {
+			clearKillTimer(pid);
 		}
 	}
 }

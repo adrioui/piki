@@ -59,7 +59,7 @@ export interface GenerateBranchSummaryOptions {
 	customInstructions?: string;
 	/** Replace the default prompt with custom instructions instead of appending them. */
 	replaceInstructions?: boolean;
-	/** Tokens reserved for prompt and model output. Defaults to 16384. */
+	/** Tokens reserved for prompt and model output. Defaults to 8192, matching OUTPUT_TOKEN_RESERVE. */
 	reserveTokens?: number;
 }
 
@@ -200,7 +200,7 @@ export async function generateBranchSummary(
 	entries: SessionTreeEntry[],
 	options: GenerateBranchSummaryOptions,
 ): Promise<Result<BranchSummaryResult, BranchSummaryError>> {
-	const { models, model, signal, customInstructions, replaceInstructions, reserveTokens = 16384 } = options;
+	const { models, model, signal, customInstructions, replaceInstructions, reserveTokens = 8192 } = options;
 	const contextWindow = model.contextWindow || 128000;
 	const tokenBudget = contextWindow - reserveTokens;
 

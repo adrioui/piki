@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Fiber, Layer, Queue, Ref, Stream } from "effect";
+import { Cause, Context, Effect, Fiber, Layer, PubSub, Queue, Ref, Stream } from "effect";
 import { FrameworkError, FrameworkErrorReporter } from "../core/framework-error.ts";
 import { HydrationContext } from "../core/hydration-context.ts";
 import { InterruptCoordinator } from "../core/interrupt-coordinator.ts";
@@ -207,6 +207,7 @@ export function defineForked(config: ForkedWorkerConfig): ForkedWorkerDefinition
 			}
 
 			// Signal handlers: subscribe to PubSub per signal.
+			const signalPubSubs = new Map<string, any>();
 			if (config.signalHandlers) {
 				const on = (signal: { name: string; tag: Context.Tag<any, any> }, handler: SignalHandlerFn) => ({
 					signal,
@@ -215,8 +216,10 @@ export function defineForked(config: ForkedWorkerConfig): ForkedWorkerDefinition
 				const handlerPairs = config.signalHandlers(on as any);
 				for (const { signal, handler } of handlerPairs) {
 					const pubsub = yield* signal.tag;
+					signalPubSubs.set(signal.name, pubsub);
+					const signalQueue = yield* PubSub.subscribe(pubsub);
 					yield* Effect.forkScoped(
-						Stream.runForEach(Stream.fromPubSub(pubsub), (value: any) =>
+						Stream.runForEach(Stream.fromQueue(signalQueue), (value: any) =>
 							Effect.gen(function* () {
 								if (yield* hydration.isHydrating()) return;
 								const signalForkId = extractForkIdFromSignal(value);
@@ -268,7 +271,13 @@ export function defineForked(config: ForkedWorkerConfig): ForkedWorkerDefinition
 							}
 						}
 					}),
-				processSignal: (_signal: any) => Effect.void,
+				processSignal: (signal: any) =>
+					Effect.gen(function* () {
+						const pubsub = signalPubSubs.get(signal.type);
+						if (pubsub) {
+							yield* PubSub.publish(pubsub, signal.payload);
+						}
+					}),
 				activeForkIds: Ref.get(forkFibers).pipe(Effect.map((m) => [...m.keys()])),
 			} satisfies ForkedWorkerShape;
 		}),

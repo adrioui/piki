@@ -1,4 +1,10 @@
-import { type AssistantMessage, createAssistantMessageEventStream, fauxAssistantMessage, type Model } from "@piki/ai";
+import {
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	fauxAssistantMessage,
+	fauxToolCall,
+	type Model,
+} from "@piki/ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
 import { createHarness, type Harness } from "./harness.ts";
@@ -56,6 +62,26 @@ function useSummaryStreamFn(harness: Harness, summary: string): () => number {
 				usage: createUsage(10),
 			};
 			stream.push({ type: "done", reason: "stop", message });
+		});
+		return stream;
+	};
+	return () => callCount;
+}
+
+function useCompactToolStreamFn(harness: Harness, summary: string): () => number {
+	let callCount = 0;
+	harness.session.agent.streamFn = (model) => {
+		callCount++;
+		const stream = createAssistantMessageEventStream();
+		queueMicrotask(() => {
+			const message: AssistantMessage = {
+				...fauxAssistantMessage([fauxToolCall("compact", { summary, reflection: `Compacted: ${summary}` })]),
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				usage: createUsage(10),
+			};
+			stream.push({ type: "done", reason: "toolUse", message });
 		});
 		return stream;
 	};
@@ -153,7 +179,7 @@ describe("AgentSession compaction characterization", () => {
 		const harness = await createHarness({ withConfiguredAuth: false });
 		harnesses.push(harness);
 		seedCompactableSession(harness);
-		const getStreamCallCount = useSummaryStreamFn(harness, "auto summary from custom stream");
+		const getStreamCallCount = useCompactToolStreamFn(harness, "auto summary from custom stream");
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 
 		await sessionInternals._runAutoCompaction("threshold", false);

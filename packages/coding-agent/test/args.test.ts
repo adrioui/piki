@@ -120,6 +120,18 @@ describe("parseArgs", () => {
 			expect(result.mode).toBe("json");
 		});
 
+		test("parses --mode rpc", () => {
+			const result = parseArgs(["--mode", "rpc"]);
+			expect(result.mode).toBe("rpc");
+		});
+
+		test("rejects unknown --mode with error diagnostic", () => {
+			const result = parseArgs(["--mode", "bogus"]);
+			expect(result.mode).toBeUndefined();
+			const error = result.diagnostics.find((d) => d.type === "error");
+			expect(error?.message).toContain("Invalid mode");
+		});
+
 		test("parses --session", () => {
 			const result = parseArgs(["--session", "/path/to/session.jsonl"]);
 			expect(result.session).toBe("/path/to/session.jsonl");
@@ -351,35 +363,78 @@ describe("parseArgs", () => {
 		});
 
 		test("parses --tools flag", () => {
-			const result = parseArgs(["--tools", "read,bash"]);
-			expect(result.tools).toEqual(["read", "bash"]);
+			const result = parseArgs(["--tools", "read,shell"]);
+			expect(result.tools).toEqual(["read", "shell"]);
 		});
 
 		test("parses -t shorthand", () => {
-			const result = parseArgs(["-t", "read,bash"]);
-			expect(result.tools).toEqual(["read", "bash"]);
+			const result = parseArgs(["-t", "read,shell"]);
+			expect(result.tools).toEqual(["read", "shell"]);
 		});
 
 		test("parses --exclude-tools flag", () => {
-			const result = parseArgs(["--exclude-tools", "read,bash"]);
-			expect(result.excludeTools).toEqual(["read", "bash"]);
+			const result = parseArgs(["--exclude-tools", "read,shell"]);
+			expect(result.excludeTools).toEqual(["read", "shell"]);
 		});
 
 		test("parses -xt shorthand", () => {
-			const result = parseArgs(["-xt", "read,bash"]);
-			expect(result.excludeTools).toEqual(["read", "bash"]);
+			const result = parseArgs(["-xt", "read,shell"]);
+			expect(result.excludeTools).toEqual(["read", "shell"]);
 		});
 
 		test("parses --no-tools with explicit --tools flags", () => {
-			const result = parseArgs(["--no-tools", "--tools", "read,bash"]);
+			const result = parseArgs(["--no-tools", "--tools", "read,shell"]);
 			expect(result.noTools).toBe(true);
-			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.tools).toEqual(["read", "shell"]);
 		});
 
 		test("parses --no-builtin-tools with explicit --tools flags", () => {
-			const result = parseArgs(["--no-builtin-tools", "--tools", "read,bash"]);
+			const result = parseArgs(["--no-builtin-tools", "--tools", "read,shell"]);
 			expect(result.noBuiltinTools).toBe(true);
-			expect(result.tools).toEqual(["read", "bash"]);
+			expect(result.tools).toEqual(["read", "shell"]);
+		});
+	});
+
+	describe("safeguard and solo flags", () => {
+		test("--solo excludes exactly the six worker/task tools", () => {
+			const result = parseArgs(["--solo"]);
+			expect(result.excludeTools).toEqual([
+				"createTask",
+				"updateTask",
+				"spawnWorker",
+				"killWorker",
+				"reassignWorker",
+				"messageWorker",
+			]);
+			expect(result.noTools).toBeUndefined();
+		});
+
+		test("--solo merges with existing exclude-tools", () => {
+			const result = parseArgs(["--exclude-tools", "read", "--solo"]);
+			expect(result.excludeTools).toEqual([
+				"read",
+				"createTask",
+				"updateTask",
+				"spawnWorker",
+				"killWorker",
+				"reassignWorker",
+				"messageWorker",
+			]);
+		});
+
+		test("--disable-shell-safeguards sets the flag", () => {
+			const result = parseArgs(["--disable-shell-safeguards"]);
+			expect(result.disableShellSafeguards).toBe(true);
+		});
+
+		test("--disable-cwd-safeguards sets the flag", () => {
+			const result = parseArgs(["--disable-cwd-safeguards"]);
+			expect(result.disableCwdSafeguards).toBe(true);
+		});
+
+		test("--autopilot sets the flag", () => {
+			const result = parseArgs(["--autopilot"]);
+			expect(result.autopilot).toBe(true);
 		});
 	});
 

@@ -31,11 +31,23 @@ export interface SpawnWorkerInput {
 	message?: string;
 	taskId?: string;
 	context?: string;
+	agentId?: string;
+	/**
+	 * When true, block the caller (leader) until the spawned worker produces
+	 * its first result, mirroring Magnitude alpha22's `spawn_worker({yield:true})`
+	 * synchronous-handoff semantics.
+	 */
+	yield?: boolean;
 }
 
 export interface MessageWorkerInput {
 	workerId: string;
 	message: string;
+	/**
+	 * When true, register a cooperative yield intent for the leader turn so
+	 * control passes to the workers (alpha22 `yieldTarget = "workers"`).
+	 */
+	yield?: boolean;
 }
 
 export interface KillWorkerInput {
@@ -44,19 +56,22 @@ export interface KillWorkerInput {
 }
 
 export interface CreateTaskInput {
+	/** Caller-provided task ID; used verbatim if provided, else randomUUID. */
+	taskId?: string;
 	title: string;
 	description?: string;
 	parentId?: string;
+	/** Task ID this task depends on (runs after). */
+	after?: string;
 	assignee?: string;
 }
 
 export interface UpdateTaskInput {
 	taskId: string;
-	status: "pending" | "working" | "completed" | "cancelled";
+	status: "pending" | "completed" | "cancelled";
 }
 
 export interface FinishGoalInput {
-	goalText?: string;
 	evidence?: string;
 }
 
@@ -90,8 +105,12 @@ export class ForkRuntime {
 	private readonly getSequence: () => number;
 	private readonly resolveModel?: (role: string) => { provider: string; id: string } | undefined;
 	private readonly workerForkIds = new Map<string, string>();
-	/** taskId → agentId currently assigned, so reassign can kill the prior worker. */
+	/** taskId → agentId currently assigned, used by reassign and spawn validation. */
 	private readonly taskAssignees = new Map<string, string>();
+	/** agentId → true when the spawn requested `yield: true`. Consumed at the
+	 * turn layer (not inline) to implement Magnitude alpha22's cooperative
+	 * `yieldTarget = "workers"` handoff. */
+	private readonly yieldIntents = new Set<string>();
 	private readonly mutationSemaphore = Effect.runSync(STM.commit(TSemaphore.make(1)));
 
 	constructor(options: ForkRuntimeOptions) {
@@ -110,14 +129,23 @@ export class ForkRuntime {
 	 * The role must be spawnable (in SPAWNABLE_ROLES).
 	 */
 	async spawnWorker(input: SpawnWorkerInput): Promise<{ forkId: string; agentId: string }> {
-		return this.withMutation(async () => {
-			if (!SPAWNABLE_ROLES.has(input.role)) {
+		if (!SPAWNABLE_ROLES.has(input.role)) {
+			throw new Error(`Role "${input.role}" is not spawnable. Spawnable roles: ${[...SPAWNABLE_ROLES].join(", ")}`);
+		}
+		// Alpha22 contract: a worker can only be bound to a task that is not
+		// already owned by a different worker. This prevents two workers from
+		// being silently attached to the same task.
+		const agentId = input.agentId && String(input.agentId).length > 0 ? String(input.agentId) : randomUUID();
+		if (input.taskId) {
+			const existing = this.taskAssignees.get(input.taskId);
+			if (existing && existing !== agentId) {
 				throw new Error(
-					`Role "${input.role}" is not spawnable. Spawnable roles: ${[...SPAWNABLE_ROLES].join(", ")}`,
+					`Task "${input.taskId}" is already assigned to worker "${existing}"; cannot assign to "${agentId}"`,
 				);
 			}
+		}
+		return this.withMutation(async () => {
 			const forkId = randomUUID();
-			const agentId = randomUUID();
 			const model = this.resolveModel?.(input.role);
 			await this.publish("agent_created", {
 				forkId,
@@ -135,6 +163,13 @@ export class ForkRuntime {
 			if (input.taskId) {
 				this.taskAssignees.set(input.taskId, agentId);
 			}
+			if (input.yield) {
+				// Cooperative turn-level handoff (alpha22 `yieldTarget = "workers"`).
+				// The leader turn ends after spawning; control passes to the workers.
+				// The worker result is delivered via the worker_finished/worker_result
+				// path, not returned inline to the tool caller.
+				this.yieldIntents.add(agentId);
+			}
 			await this.publish("fork_created", {
 				forkId,
 				parentForkId: this.sessionId,
@@ -146,9 +181,33 @@ export class ForkRuntime {
 	}
 
 	/**
+	 * True if the spawn that produced `agentId` requested `yield: true`.
+	 * Consumed once (turn-level) by the orchestrator to set the leader turn's
+	 * cooperative handoff target.
+	 */
+	hasYieldIntent(agentId: string): boolean {
+		return this.yieldIntents.has(agentId);
+	}
+
+	/**
+	 * Take and clear the yield intent for `agentId` (turn-level, one-shot).
+	 */
+	takeYieldIntent(agentId: string): boolean {
+		if (this.yieldIntents.has(agentId)) {
+			this.yieldIntents.delete(agentId);
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Send a message to a worker. Publishes a `worker_messaged` event.
 	 */
 	async messageWorker(input: MessageWorkerInput): Promise<void> {
+		if (input.yield) {
+			// Cooperative turn-level handoff (alpha22 `yieldTarget = "workers"`).
+			this.yieldIntents.add(input.workerId);
+		}
 		await this.publish("worker_messaged", {
 			workerId: input.workerId,
 			forkId: this.workerForkIds.get(input.workerId),
@@ -184,7 +243,7 @@ export class ForkRuntime {
 	 */
 	async createTask(input: CreateTaskInput): Promise<{ taskId: string }> {
 		return this.withMutation(async () => {
-			const taskId = randomUUID();
+			const taskId = input.taskId && String(input.taskId).length > 0 ? String(input.taskId) : randomUUID();
 			await this.publish("task.created", {
 				taskId,
 				title: input.title,
@@ -214,7 +273,6 @@ export class ForkRuntime {
 	 */
 	async finishGoal(input: FinishGoalInput): Promise<void> {
 		await this.publish("goal.completion_requested", {
-			goalText: input.goalText,
 			evidence: input.evidence,
 			sessionId: this.sessionId,
 		});
@@ -242,26 +300,23 @@ export class ForkRuntime {
 	}
 
 	/**
-	 * Reassign a task to a different worker. Publishes a `task.assigned` event.
+	 * Reassign a task to a different worker.
+	 *
+	 * Magnitude alpha22 semantics: the previously-assigned worker keeps its
+	 * identity, fork, and conversation history — only the task binding moves.
+	 * We therefore do NOT publish `agent_finished{killed}` / `worker_killed`
+	 * for the prior worker (that would destroy its session). The old worker
+	 * stays alive and the task is rebound via the existing `task.assigned`
+	 * event, which the orchestrator's task dispatcher forwards to the new
+	 * assignee.
 	 */
 	async reassignWorker(input: ReassignWorkerInput): Promise<void> {
 		await this.withMutation(async () => {
 			const oldWorkerId = this.taskAssignees.get(input.taskId);
 			if (oldWorkerId && oldWorkerId !== input.workerId) {
-				const oldForkId = this.workerForkIds.get(oldWorkerId) ?? oldWorkerId;
-				await this.publish("agent_finished", {
-					agentId: oldWorkerId,
-					forkId: oldForkId,
-					willRetry: false,
-					killed: true,
-					stopReason: "killed",
-					reason: "reassigned to new worker",
-				});
-				await this.publish("worker_killed", {
-					agentId: oldWorkerId,
-					forkId: oldForkId,
-					reason: "reassigned to new worker",
-				});
+				// Preserve the old worker's live fork/session. The task binding below
+				// is the only state that changes.
+				void oldWorkerId;
 			}
 			this.taskAssignees.set(input.taskId, input.workerId);
 			await this.publish("task.assigned", {
@@ -279,5 +334,14 @@ export class ForkRuntime {
 			message: input.message,
 			sessionId: this.sessionId,
 		});
+	}
+
+	/**
+	 * Resolve the worker (agent) ID bound to a task ID. Returns undefined if no
+	 * worker was spawned with that taskId. Used by the `kill_worker` handler so
+	 * workers can be killed by task ID (alpha22 semantics).
+	 */
+	workerIdForTask(taskId: string): string | undefined {
+		return this.taskAssignees.get(taskId);
 	}
 }

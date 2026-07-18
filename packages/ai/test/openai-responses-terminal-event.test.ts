@@ -141,6 +141,24 @@ async function* createIncompleteEvents(): AsyncIterable<ResponseStreamEvent> {
 	} as ResponseStreamEvent;
 }
 
+async function* createContentFilteredEvents(): AsyncIterable<ResponseStreamEvent> {
+	yield {
+		type: "response.incomplete",
+		sequence_number: 0,
+		response: {
+			id: "resp_content_filtered",
+			status: "incomplete",
+			incomplete_details: { reason: "content_filter" },
+			usage: {
+				input_tokens: 30,
+				output_tokens: 12,
+				total_tokens: 42,
+				input_tokens_details: { cached_tokens: 5 },
+			},
+		},
+	} as unknown as ResponseStreamEvent;
+}
+
 async function* createFailedEvents(): AsyncIterable<ResponseStreamEvent> {
 	yield {
 		type: "response.failed",
@@ -212,6 +230,24 @@ describe("OpenAI Responses terminal event handling", () => {
 
 		expect(output.responseId).toBe("resp_incomplete");
 		expect(output.stopReason).toBe("length");
+		expect(output.usage).toMatchObject({
+			input: 25,
+			output: 12,
+			cacheRead: 5,
+			cacheWrite: 0,
+			totalTokens: 42,
+		});
+	});
+
+	it("finalizes content-filtered incomplete terminal events as contentFiltered", async () => {
+		const model = createModel();
+		const output = createOutput(model);
+		const stream = new AssistantMessageEventStream();
+
+		await processResponsesStream(createContentFilteredEvents(), output, stream, model);
+
+		expect(output.responseId).toBe("resp_content_filtered");
+		expect(output.stopReason).toBe("contentFiltered");
 		expect(output.usage).toMatchObject({
 			input: 25,
 			output: 12,

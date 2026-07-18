@@ -1,90 +1,15 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
-import { Type } from "typebox";
+import { loadSkillsFromDir } from "@piki/skills";
 import { describe, expect, it } from "vitest";
-import { makeCompactionContext, readSubmittedCompactionResult } from "../src/core/compaction/index.ts";
-import {
-	createToolkit,
-	defineHarnessTool,
-	expandScratchpadPath,
-	harnessToolToAgentTool,
-	mergeToolkits,
-	validateStreamInput,
-} from "../src/core/harness/index.ts";
+import { expandScratchpadPath, validateStreamInput } from "../src/core/harness/index.ts";
 import { StreamValidationError } from "../src/core/harness/stream-validation.ts";
-import { loadSkillsFromDir } from "../src/core/skills.ts";
 import { createCheckpointRollbackToolDefinition } from "../src/core/tools/checkpoint-rollback.ts";
 import { createTool, createToolDefinition } from "../src/core/tools/index.ts";
 import { createRoleControlTool } from "../src/core/tools/role-control-tool.ts";
 
 describe("harness foundation", () => {
-	it("adapts a harness tool to the current AgentTool result shape", async () => {
-		const harnessTool = defineHarnessTool({
-			definition: {
-				name: "echo_value",
-				description: "Echo a value",
-				inputSchema: Schema.Struct({ value: Schema.String }),
-				outputSchema: Schema.Struct({ echoed: Schema.String }),
-			},
-			execute: ({ value }) => Effect.succeed({ echoed: value }),
-		});
-		const agentTool = harnessToolToAgentTool(harnessTool, {
-			parameters: Type.Object({ value: Type.String() }),
-			formatOutput: (output) => output.echoed,
-		});
-
-		const result = await agentTool.execute("call-1", { value: "ok" }, undefined, undefined);
-
-		expect(result.content).toEqual([{ type: "text", text: "ok" }]);
-		expect(result.details).toEqual({ echoed: "ok" });
-	});
-
-	it("registers and merges tools through Toolkit", () => {
-		const first = defineHarnessTool({
-			definition: {
-				name: "first",
-				description: "First",
-				inputSchema: Schema.Void,
-				outputSchema: Schema.Void,
-			},
-			execute: () => Effect.void,
-		});
-		const second = defineHarnessTool({
-			definition: {
-				name: "second",
-				description: "Second",
-				inputSchema: Schema.Void,
-				outputSchema: Schema.Void,
-			},
-			execute: () => Effect.void,
-		});
-
-		const merged = createToolkit([first]).merge(createToolkit([second]));
-
-		expect(merged.get("first")).toBe(first);
-		expect(merged.get("second")).toBe(second);
-		expect(merged.list().map((tool) => tool.definition.name)).toEqual(["first", "second"]);
-		expect(
-			merged
-				.pick(["second"])
-				.list()
-				.map((tool) => tool.definition.name),
-		).toEqual(["second"]);
-		expect(
-			merged
-				.omit(["first"])
-				.list()
-				.map((tool) => tool.definition.name),
-		).toEqual(["second"]);
-		expect(
-			mergeToolkits(createToolkit([first]), createToolkit([second]))
-				.list()
-				.map((tool) => tool.definition.name),
-		).toEqual(["first", "second"]);
-	});
-
 	it("expands $M scratchpad paths", () => {
 		expect(expandScratchpadPath("$M", "/tmp/session/scratchpad")).toEqual({
 			path: "/tmp/session/scratchpad",
@@ -123,7 +48,7 @@ describe("harness foundation", () => {
 			const result = await readTool.execute("call-1", { path: "sample.txt" });
 			const firstBlock = result.content[0];
 
-			expect(readTool.description).toContain("Read file text content");
+			expect(readTool.description).toContain("Read the contents of a file");
 			expect(firstBlock?.type).toBe("text");
 			if (firstBlock?.type !== "text") {
 				throw new Error("read tool should return text");
@@ -131,13 +56,16 @@ describe("harness foundation", () => {
 			expect(firstBlock.text).toContain("alpha");
 
 			const readDefinition = createToolDefinition("read", tempDir, { scratchpadPath: tempDir });
-			expect(readDefinition.description).toContain("Read file text content");
+			expect(readDefinition.description).toContain("Read the contents of a file");
 			expect(readDefinition.renderCall).toBeTypeOf("function");
 
 			const editDefinition = createToolDefinition("edit", tempDir, { scratchpadPath: tempDir });
 			expect(editDefinition.stream).toBeDefined();
-			expect(editDefinition.emissionSchema).toBeDefined();
-			expect(editDefinition.errorSchema).toBeDefined();
+			expect(editDefinition.renderCall).toBeTypeOf("function");
+			// The edit tool definition intentionally leaves emissionSchema and
+			// errorSchema undefined (stream-based tool); assert the contract.
+			expect(editDefinition.emissionSchema).toBeUndefined();
+			expect(editDefinition.errorSchema).toBeUndefined();
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -205,24 +133,32 @@ describe("harness foundation", () => {
 
 		const props = (compact.parameters as typeof compact.parameters & { properties: Record<string, unknown> })
 			.properties;
-		const result = await compact.execute("call-1", { custom_instructions: "focus" });
+		const result = await compact.execute("call-1", {});
 
 		expect(compact.name).toBe("compact");
-		expect(props.custom_instructions).toBeDefined();
-		expect(result.content[0]).toEqual({ type: "text", text: "Compacted context.\n\nsummary:focus" });
+		expect(props.summary).toBeDefined();
+		expect(result.content[0]).toEqual({ type: "text", text: "Compacted context.\n\nsummary:" });
 		expect(result.details).toEqual({
-			summary: "summary:focus",
+			summary: "summary:",
 			firstKeptEntryId: "entry-1",
 			tokensBefore: 123,
 			estimatedTokensAfter: 45,
 		});
 	});
 
-	it("supports lifecycle-guarded compact submissions", async () => {
-		const context = await Effect.runPromise(makeCompactionContext({ maxPayloadTokens: 1000 }));
+	it("runs live session compaction via runCompact", async () => {
+		let captured: string | undefined;
 		const compact = createTool("compact", "/tmp", {
 			compact: {
-				getCompactionContext: () => context,
+				runCompact: async (customInstructions) => {
+					captured = customInstructions;
+					return {
+						summary: "Keep the implementation plan.",
+						firstKeptEntryId: "entry-1",
+						tokensBefore: 123,
+						estimatedTokensAfter: 45,
+					};
+				},
 			},
 		});
 		const result = await compact.execute("call-1", {
@@ -230,15 +166,14 @@ describe("harness foundation", () => {
 			reflection: "Continue from the VCS tests.",
 			files: ["packages/coding-agent/src/core/vcs/shadow-vcs.ts"],
 		});
-		const submitted = await Effect.runPromise(readSubmittedCompactionResult(context));
 
+		expect(captured).toBeUndefined();
 		expect(result.details).toMatchObject({
-			status: "ok",
-			filesRead: 1,
 			summary: "Keep the implementation plan.",
-			reflection: "Continue from the VCS tests.",
+			firstKeptEntryId: "entry-1",
+			tokensBefore: 123,
+			estimatedTokensAfter: 45,
 		});
-		expect(submitted?.summary).toBe("Keep the implementation plan.");
 	});
 
 	it("exposes compatible query_image tool", async () => {
@@ -278,10 +213,10 @@ describe("harness foundation", () => {
 
 		expect(webSearch.name).toBe("web_search");
 		expect(searchProps.query).toBeDefined();
-		expect(searchProps.numResults).toBeDefined();
+		expect(searchProps.maxResults).toBeDefined();
 		expect(webFetch.name).toBe("web_fetch");
 		expect(fetchProps.url).toBeDefined();
-		expect(fetchProps.max_length).toBeDefined();
+		expect(fetchProps.maxLength).toBeDefined();
 	});
 
 	it("exposes compatible skill tool", async () => {
@@ -305,21 +240,19 @@ describe("harness foundation", () => {
 
 			const props = (skill.parameters as typeof skill.parameters & { properties: Record<string, unknown> })
 				.properties;
-			const result = await skill.execute("call-1", { name: "debugger", args: "Investigate failure" });
+			const result = await skill.execute("call-1", { name: "debugger" });
 
 			expect(skill.name).toBe("skill");
 			expect(props.name).toBeDefined();
-			expect(props.args).toBeDefined();
 			expect(result.content[0]?.type).toBe("text");
 			expect(result.content[0]).toEqual({
 				type: "text",
-				text: `<skill name="debugger" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\nUse logs and tests.\n</skill>\n\nInvestigate failure`,
+				text: `<skill name="debugger" location="${join(skillDir, "SKILL.md")}">\nReferences are relative to ${skillDir}.\n\nUse logs and tests.\n</skill>`,
 			});
 			expect(result.details).toEqual({
 				skillName: "debugger",
 				skillPath: join(skillDir, "SKILL.md"),
 				baseDir: skillDir,
-				hasArgs: true,
 			});
 			expect(activations).toEqual([result.details]);
 		} finally {

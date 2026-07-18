@@ -1,5 +1,7 @@
 import { accessSync, constants } from "node:fs";
 import { access } from "node:fs/promises";
+import { resolve as nodeResolve } from "node:path";
+import { expandScratchpadPath } from "@piki/scratchpad";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -109,6 +111,97 @@ export async function resolveReadPathAsync(filePath: string, cwd: string): Promi
 	}
 
 	// Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
+	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
+	if (nfdCurlyVariant !== resolved && (await pathExists(nfdCurlyVariant))) {
+		return nfdCurlyVariant;
+	}
+
+	return resolved;
+}
+
+/**
+ * Resolve a file-tool path with Magnitude alpha22 parity.
+ *
+ * Mag resolves every file tool path as `expandScratchpadPath(path, scratchpadPath)`
+ * then `path.resolve(cwd, expanded)` — it expands `$M`/`${M}` to the session
+ * scratchpad but does NOT expand `~` (so `~/foo` resolves to `<cwd>/~/foo`, a
+ * literal subdir inside cwd). piki's prior `resolveToCwd` tilde-expanded to
+ * `$HOME` and never expanded `$M`, so the resolved target could diverge from
+ * the permission gate (which uses `expandScratchpadPath`). This helper aligns
+ * the writers on mag's exact resolver and keeps the gate and the write target
+ * identical.
+ */
+export function resolveToolPath(filePath: string, cwd: string, scratchpadPath: string): string {
+	const { path: expanded } = expandScratchpadPath(filePath, scratchpadPath);
+	return nodeResolve(cwd, expanded);
+}
+
+/**
+ * Magnitude-parity read-path resolver (sync).
+ *
+ * `read`/`view` layer macOS NFD/curly-quote/screenshot variant fallbacks on top
+ * of the resolved path. This wires those fallbacks onto the mag-parity resolver
+ * (`resolveToolPath`) so `~/x` stays literal (`<cwd>/~/x`) while the macOS
+ * screenshot-read heuristics are preserved. Without this, switching `read`/`view`
+ * to `resolveToolPath` would silently drop the variant logic.
+ */
+export function resolveReadPathTool(filePath: string, cwd: string, scratchpadPath: string): string {
+	const resolved = resolveToolPath(filePath, cwd, scratchpadPath);
+
+	if (fileExists(resolved)) {
+		return resolved;
+	}
+
+	const amPmVariant = tryMacOSScreenshotPath(resolved);
+	if (amPmVariant !== resolved && fileExists(amPmVariant)) {
+		return amPmVariant;
+	}
+
+	const nfdVariant = tryNFDVariant(resolved);
+	if (nfdVariant !== resolved && fileExists(nfdVariant)) {
+		return nfdVariant;
+	}
+
+	const curlyVariant = tryCurlyQuoteVariant(resolved);
+	if (curlyVariant !== resolved && fileExists(curlyVariant)) {
+		return curlyVariant;
+	}
+
+	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
+	if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
+		return nfdCurlyVariant;
+	}
+
+	return resolved;
+}
+
+/**
+ * Magnitude-parity read-path resolver (async). Mirror of `resolveReadPathTool`
+ * using the async existence check. Used by `read`/`view` which resolve paths
+ * asynchronously.
+ */
+export async function resolveReadPathAsyncTool(filePath: string, cwd: string, scratchpadPath: string): Promise<string> {
+	const resolved = resolveToolPath(filePath, cwd, scratchpadPath);
+
+	if (await pathExists(resolved)) {
+		return resolved;
+	}
+
+	const amPmVariant = tryMacOSScreenshotPath(resolved);
+	if (amPmVariant !== resolved && (await pathExists(amPmVariant))) {
+		return amPmVariant;
+	}
+
+	const nfdVariant = tryNFDVariant(resolved);
+	if (nfdVariant !== resolved && (await pathExists(nfdVariant))) {
+		return nfdVariant;
+	}
+
+	const curlyVariant = tryCurlyQuoteVariant(resolved);
+	if (curlyVariant !== resolved && (await pathExists(curlyVariant))) {
+		return curlyVariant;
+	}
+
 	const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
 	if (nfdCurlyVariant !== resolved && (await pathExists(nfdCurlyVariant))) {
 		return nfdCurlyVariant;

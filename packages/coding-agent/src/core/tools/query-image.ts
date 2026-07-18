@@ -42,7 +42,7 @@ export function createQueryImageToolDefinition(
 		name: "query_image",
 		label: "Query Image",
 		description:
-			"Query an image file by sending it to an image utility model along with an optional question. Use this to inspect images when the active model does not support direct vision. Supports PNG, JPEG, WebP, GIF, and SVG files. When no query is provided, a detailed description of the image is returned.",
+			"Query an image file by sending it to an image utility model along with an optional question. Use this to inspect images when the active model does not support direct vision. Supports PNG, JPEG, WebP, and GIF files. When no query is provided, a detailed description of the image is returned.",
 		parameters: queryImageSchema,
 		async execute(
 			_toolCallId,

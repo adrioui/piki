@@ -1,4 +1,4 @@
-import { Effect, ManagedRuntime } from "effect";
+import { Cause, Effect, Exit, ManagedRuntime } from "effect";
 import { describe, expect, it } from "vitest";
 import { Ambient, AmbientLive, UnregisteredAmbientDefect } from "../../src/runtime/ambient-service.ts";
 
@@ -21,20 +21,20 @@ describe("Ambient (G13)", () => {
 	});
 
 	it("depend dies with UnregisteredAmbientDefect when missing, succeeds when registered", async () => {
-		try {
-			await Effect.runPromise(
-				Effect.gen(function* () {
-					const ambient = yield* Ambient;
-					return yield* ambient.depend<unknown>("db");
-				}).pipe(Effect.provide(AmbientLive)),
-			);
-			throw new Error("expected depend to die but it resolved");
-		} catch (err) {
-			const defect = err as UnregisteredAmbientDefect;
-			expect(defect).toBeInstanceOf(UnregisteredAmbientDefect);
-			expect(defect._tag).toBe("UnregisteredAmbientDefect");
-			expect(defect.ambientName).toBe("db");
+		const exit = await Effect.runPromiseExit(
+			Effect.gen(function* () {
+				const ambient = yield* Ambient;
+				return yield* ambient.depend<unknown>("db");
+			}).pipe(Effect.provide(AmbientLive)),
+		);
+		if (!Exit.isFailure(exit) || !Cause.isDie(exit.cause)) {
+			throw new Error("expected an UnregisteredAmbientDefect die");
 		}
+		const defect = (exit.cause as unknown as { readonly defect: unknown }).defect;
+		expect(defect).toBeInstanceOf(UnregisteredAmbientDefect);
+		const unregistered = defect as UnregisteredAmbientDefect;
+		expect(unregistered._tag).toBe("UnregisteredAmbientDefect");
+		expect(unregistered.ambientName).toBe("db");
 
 		const value = await Effect.runPromise(
 			Effect.gen(function* () {

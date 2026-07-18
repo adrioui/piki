@@ -1,4 +1,5 @@
 import type { AssistantMessage, ImageContent, Model, Models, TextContent, Usage } from "@piki/ai";
+import { KEEP_MESSAGE_RATIO, OUTPUT_TOKEN_RESERVE, SOFT_CAP_MAX_TOKENS, SOFT_CAP_RATIO } from "../../constants.ts";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
 	convertToLlm,
@@ -7,6 +8,7 @@ import {
 	createCustomMessage,
 } from "../messages.ts";
 import { buildSessionContext } from "../session/session.ts";
+import type { ExecutionEnv } from "../types.ts";
 import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.ts";
 import {
 	computeFileLists,
@@ -101,18 +103,36 @@ export interface CompactionResult<T = unknown> {
 export interface CompactionSettings {
 	/** Enable automatic compaction decisions. */
 	enabled: boolean;
-	/** Tokens reserved for summary prompt and output. */
+	/** Tokens reserved for summary prompt and output. Also serves as a floor for the trigger threshold. */
 	reserveTokens: number;
-	/** Approximate recent-context tokens to keep after compaction. */
-	keepRecentTokens: number;
+	/** Approximate recent-context tokens to keep after compaction. Defaults to `keepRatio * softCap` when omitted. */
+	keepRecentTokens?: number;
+	/** Fraction of the soft cap retained as recent context. Mirrors alpha22's `KEEP_MESSAGE_RATIO`. */
+	keepRatio: number;
 }
 
 /** Default compaction settings used by the harness. */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	reserveTokens: 16384,
-	keepRecentTokens: 20000,
+	reserveTokens: OUTPUT_TOKEN_RESERVE,
+	keepRatio: KEEP_MESSAGE_RATIO,
 };
+
+/**
+ * Compaction trigger threshold (alpha22 `softCap`).
+ * `min(0.9 * (contextWindow - OUTPUT_TOKEN_RESERVE), 200_000)`.
+ */
+export function computeSoftCap(contextWindow: number): number {
+	return Math.min(Math.floor((contextWindow - OUTPUT_TOKEN_RESERVE) * SOFT_CAP_RATIO), SOFT_CAP_MAX_TOKENS);
+}
+
+/** Recent-context token budget retained after compaction (`keepRatio * softCap`). */
+export function computeKeepRecentTokens(contextWindow: number, settings: CompactionSettings): number {
+	if (settings.keepRecentTokens && settings.keepRecentTokens > 0) {
+		return settings.keepRecentTokens;
+	}
+	return Math.max(0, Math.floor(computeSoftCap(contextWindow) * settings.keepRatio));
+}
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
@@ -155,6 +175,10 @@ export interface ContextUsageEstimate {
 	trailingTokens: number;
 	/** Index of the message that provided usage, or null when none exists. */
 	lastUsageIndex: number | null;
+	/** How the estimate was derived: "usage" when a provider usage block was
+	 * available, "heuristic" when the whole history was guessed via chars/4.
+	 * Callers must treat a heuristic estimate as an upper bound. */
+	source: "usage" | "heuristic";
 }
 
 function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
@@ -179,6 +203,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 			usageTokens: 0,
 			trailingTokens: estimated,
 			lastUsageIndex: null,
+			source: "heuristic",
 		};
 	}
 
@@ -193,13 +218,18 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 		usageTokens,
 		trailingTokens,
 		lastUsageIndex: usageInfo.index,
+		source: "usage",
 	};
 }
 
 /** Return whether context usage exceeds the configured compaction threshold. */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	const softCap = computeSoftCap(contextWindow);
+	// softCap is the primary trigger; reserveTokens acts as a floor so compaction
+	// never fires below the headroom needed to write the summary.
+	const threshold = Math.min(softCap, contextWindow - settings.reserveTokens);
+	return contextTokens > threshold;
 }
 
 const ESTIMATED_IMAGE_CHARS = 4800;
@@ -408,6 +438,12 @@ Use this EXACT format:
 ## Key Decisions
 - **[Decision]**: [Brief rationale]
 
+## Reflection
+- [What went wrong, failed attempts, or dead ends encountered]
+- [What to avoid repeating]
+- [Misunderstandings or course corrections made]
+- [Or "(none)" if the work proceeded without notable issues]
+
 ## Next Steps
 1. [Ordered list of what should happen next]
 
@@ -447,6 +483,10 @@ Use this EXACT format:
 
 ## Key Decisions
 - **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Reflection
+- [New failures, dead ends, or course corrections discovered in the new messages]
+- [Preserve previous reflection content; add or update as needed]
 
 ## Next Steps
 1. [Update based on current state]
@@ -545,6 +585,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
 	pathEntries: SessionTreeEntry[],
 	settings: CompactionSettings,
+	contextWindow?: number,
 ): Result<CompactionPreparation | undefined, CompactionError> {
 	if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {
 		return ok(undefined);
@@ -570,7 +611,11 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const keepRecentTokens = contextWindow
+		? computeKeepRecentTokens(contextWindow, settings)
+		: (settings.keepRecentTokens ?? 20000);
+
+	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, keepRecentTokens);
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
 	if (!firstKeptEntry?.id) {
 		return err(new CompactionError("invalid_session", "First kept entry has no UUID - session may need migration"));
@@ -626,6 +671,41 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.ts";
 
+/** Maximum characters of a single file's contents to inline into the summary. */
+const KEY_FILE_MAX_CHARS = 8000;
+
+/** Maximum number of files to inline into the summary's Key Files section. */
+const KEY_FILE_MAX_COUNT = 30;
+
+/**
+ * Inline preserved file contents into a `## Key Files` markdown section, matching
+ * alpha22's `<compaction_summary>` behavior. Files are read from disk relative to
+ * `env.cwd` when the path is not absolute. Read failures are skipped silently.
+ */
+async function buildKeyFilesSection(fileOps: FileOperations, env: ExecutionEnv, signal?: AbortSignal): Promise<string> {
+	const paths = [...new Set([...fileOps.read, ...fileOps.edited, ...fileOps.written])].sort();
+	if (paths.length === 0) return "";
+
+	const limited = paths.slice(0, KEY_FILE_MAX_COUNT);
+	const blocks: string[] = ["## Key Files"];
+
+	for (const filePath of limited) {
+		if (signal?.aborted) break;
+		const resolved = await env
+			.absolutePath(filePath, signal)
+			.then((r) => (r.ok ? r.value : filePath))
+			.catch(() => filePath);
+		const result = await env.readTextFile(resolved, signal).catch(() => undefined as never);
+		if (!result || !result.ok) continue;
+		const contents =
+			result.value.length > KEY_FILE_MAX_CHARS ? result.value.slice(0, KEY_FILE_MAX_CHARS) : result.value;
+		blocks.push(`### ${filePath}\n\`\`\`\n${contents}\n\`\`\``);
+	}
+
+	if (blocks.length === 1) return "";
+	return `\n\n${blocks.join("\n\n")}`;
+}
+
 /** Generate compaction summary data from prepared session history. */
 export async function compact(
 	preparation: CompactionPreparation,
@@ -634,6 +714,7 @@ export async function compact(
 	customInstructions?: string,
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
+	env?: ExecutionEnv,
 ): Promise<Result<CompactionResult, CompactionError>> {
 	const {
 		firstKeptEntryId,
@@ -694,6 +775,10 @@ export async function compact(
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
+	if (env) {
+		const keyFiles = await buildKeyFilesSection(fileOps, env, signal);
+		if (keyFiles) summary += keyFiles;
+	}
 
 	return ok({
 		summary,

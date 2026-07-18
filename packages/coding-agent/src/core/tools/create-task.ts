@@ -1,5 +1,5 @@
 import { createRoleControlTool } from "./role-control-tool.ts";
 
 export function createCreateTaskToolDefinition() {
-	return createRoleControlTool("createTask", "Create an event-core task.");
+	return createRoleControlTool("create_task", "Create an event-core task.");
 }

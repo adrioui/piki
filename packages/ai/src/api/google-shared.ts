@@ -312,25 +312,14 @@ export function mapStopReason(reason: FinishReason): StopReason {
 			return "stop";
 		case FinishReason.MAX_TOKENS:
 			return "length";
-		case FinishReason.BLOCKLIST:
-		case FinishReason.PROHIBITED_CONTENT:
-		case FinishReason.SPII:
-		case FinishReason.SAFETY:
-		case FinishReason.IMAGE_SAFETY:
-		case FinishReason.IMAGE_PROHIBITED_CONTENT:
-		case FinishReason.IMAGE_RECITATION:
-		case FinishReason.IMAGE_OTHER:
-		case FinishReason.RECITATION:
-		case FinishReason.FINISH_REASON_UNSPECIFIED:
-		case FinishReason.OTHER:
-		case FinishReason.LANGUAGE:
-		case FinishReason.MALFORMED_FUNCTION_CALL:
-		case FinishReason.UNEXPECTED_TOOL_CALL:
-		case FinishReason.NO_IMAGE:
-			return "error";
 		default: {
-			const _exhaustive: never = reason;
-			throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+			// Safety/recitation/blocklist family finish reasons (SAFETY, RECITATION,
+			// BLOCKLIST, PROHIBITED_CONTENT, SPII, IMAGE_*, LANGUAGE, MALFORMED_FUNCTION_CALL,
+			// UNEXPECTED_TOOL_CALL, NO_IMAGE, FINISH_REASON_UNSPECIFIED, OTHER) and any unknown
+			// reason fall through to a graceful "stop" rather than "error", matching mag's
+			// mapFinishReasonToOutcome which completes the turn as a terminal outcome for
+			// reasons it does not recognize.
+			return "stop";
 		}
 	}
 }
@@ -345,6 +334,9 @@ export function mapStopReasonString(reason: string): StopReason {
 		case "MAX_TOKENS":
 			return "length";
 		default:
-			return "error";
+			// Unknown finish reasons are mapped to a graceful "stop" rather than
+			// "error", matching mag's behavior of completing the turn as a
+			// terminal outcome for reasons it does not recognize.
+			return "stop";
 	}
 }

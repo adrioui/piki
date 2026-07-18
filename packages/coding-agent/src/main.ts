@@ -45,7 +45,7 @@ import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { exportAtif, InteractiveMode, runPrintMode } from "./modes/index.ts";
+import { exportAtif, InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
 import { handleSessionsCommand } from "./sessions-cli.ts";
@@ -101,6 +101,9 @@ function isTruthyEnvFlag(value: string | undefined): boolean {
 }
 
 function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+	if (parsed.mode === "rpc") {
+		return "rpc";
+	}
 	if (parsed.mode === "json") {
 		return "json";
 	}
@@ -319,6 +322,21 @@ async function createSessionManager(
 	}
 
 	if (parsed.resume) {
+		if (parsed.resumeId) {
+			// Inline `--resume [id]` (alpha22): open the specific session by id
+			// (UUID prefix) instead of launching the interactive picker.
+			const resolved = await resolveSessionPath(parsed.resumeId, cwd, sessionDir);
+			switch (resolved.type) {
+				case "path":
+				case "local":
+					return SessionManager.open(resolved.path, sessionDir);
+				case "global":
+					return SessionManager.open(resolved.path, sessionDir);
+				case "not_found":
+					console.error(chalk.red(`No session found matching '${resolved.arg}'`));
+					process.exit(1);
+			}
+		}
 		try {
 			const selectedPath = await selectSession(
 				(onProgress) => SessionManager.list(cwd, sessionDir, onProgress),
@@ -368,6 +386,9 @@ function buildSessionOptions(
 	const options: CreateAgentSessionOptions = {};
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	let cliThinkingFromModel = false;
+
+	if (parsed.debug) process.env.PIKI_DEBUG = "1";
+	if (parsed.debug) process.env.DEBUG = process.env.DEBUG || "*";
 
 	// Model from CLI
 	// - supports --provider <name> --model <pattern>
@@ -447,6 +468,18 @@ function buildSessionOptions(
 	}
 	if (parsed.excludeTools) {
 		options.excludeTools = [...parsed.excludeTools];
+	}
+	if (parsed.disableShellSafeguards) {
+		options.disableShellSafeguards = true;
+	}
+	if (parsed.disableCwdSafeguards) {
+		options.disableCwdSafeguards = true;
+	}
+	if (parsed.autopilot) {
+		process.env.PIKI_ENABLE_AUTOPILOT = "1";
+	}
+	if (parsed.goal) {
+		options.goal = parsed.goal;
 	}
 	const agentMode = parsed.agentMode ?? settingsManager.getAgentMode();
 	if (agentMode) {
@@ -744,6 +777,9 @@ export async function main(args: string[], options?: MainOptions) {
 			excludeTools: sessionOptions.excludeTools,
 			noTools: sessionOptions.noTools,
 			customTools: sessionOptions.customTools,
+			disableShellSafeguards: sessionOptions.disableShellSafeguards,
+			disableCwdSafeguards: sessionOptions.disableCwdSafeguards,
+			goal: sessionOptions.goal,
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {
@@ -824,6 +860,26 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(1);
 	}
 
+	// Parity with mag --headless: a new session in non-interactive mode requires an
+	// initial prompt or a goal.
+	const startsNewSession = !parsed.continue && !parsed.resume && !parsed.sessionId;
+	const hasGoal = parsed.goal !== undefined;
+	const hasInitialInput = initialMessage !== undefined || parsed.messages.length > 0;
+	if (appMode !== "interactive" && startsNewSession && !hasInitialInput && !hasGoal) {
+		if (parsed.print) {
+			return;
+		}
+		console.error(chalk.red('Error: a new non-interactive session requires a prompt (e.g. -p "...") or --goal'));
+		process.exit(1);
+	}
+
+	if (appMode === "rpc") {
+		printTimings();
+		initTheme(settingsManager.getTheme(), false);
+		await runRpcMode(runtime);
+		return;
+	}
+
 	if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
@@ -855,7 +911,19 @@ export async function main(args: string[], options?: MainOptions) {
 		printTimings();
 		await interactiveMode.run();
 		if (parsed.atif) {
-			exportAtif(session.sessionManager, parsed.atif, undefined, parsed.atifSchema);
+			const toolDefinitions = session.getAllTools().map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+			}));
+			exportAtif(
+				session.sessionManager,
+				parsed.atif,
+				undefined,
+				parsed.atifSchema,
+				{ toolDefinitions },
+				session.getForkEntries(),
+			);
 		}
 	} else {
 		printTimings();

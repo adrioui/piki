@@ -75,4 +75,25 @@ unset AWS_WEB_IDENTITY_TOKEN_FILE
 unset BEDROCK_EXTENSIVE_MODEL_TEST
 
 echo "Running tests without API keys..."
-npm test
+# Run each workspace independently so packages with no test files do not
+# prevent later workspaces from running. Preserve failures from workspaces
+# that actually execute tests.
+set +e
+failed=0
+for package_json in packages/*/package.json; do
+	package_dir=${package_json%/package.json}
+	output_file=$(mktemp)
+	npm --prefix "$package_dir" run test --if-present >"$output_file" 2>&1
+	status=$?
+	cat "$output_file"
+	if [ "$status" -ne 0 ] && ! grep -q "No test files found" "$output_file"; then
+		failed=1
+	fi
+	rm -f "$output_file"
+done
+set -e
+if [ "$failed" -ne 0 ]; then
+	echo "test run reported failures"
+	exit 1
+fi
+echo "test run completed"

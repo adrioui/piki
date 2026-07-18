@@ -11,8 +11,23 @@ import * as _bundledPiAgentCore from "@piki/agent-core";
 import * as _bundledPiAiCompat from "@piki/ai/compat";
 import * as _bundledPiAiCompatAsBase from "@piki/ai/compat";
 import * as _bundledPiAiOauth from "@piki/ai/oauth";
+import * as _bundledPiEventCore from "@piki/event-core";
+import * as _bundledPiGenerateId from "@piki/generate-id";
+import * as _bundledPiHarness from "@piki/harness";
+import * as _bundledPiLogger from "@piki/logger";
+import * as _bundledPiPikiClient from "@piki/piki-client";
+import * as _bundledPiRipgrep from "@piki/ripgrep";
+import * as _bundledPiRoles from "@piki/roles";
+import * as _bundledPiScratchpad from "@piki/scratchpad";
+import * as _bundledPiShellClassifier from "@piki/shell-classifier";
+import * as _bundledPiSkills from "@piki/skills";
+import * as _bundledPiStorage from "@piki/storage";
+import * as _bundledPiTracing from "@piki/tracing";
 import type { KeyId } from "@piki/tui";
 import * as _bundledPiTui from "@piki/tui";
+import * as _bundledPiVcs from "@piki/vcs";
+// `effect` is exposed to extensions (used for Effect-based SDK integrations).
+import * as _bundledEffect from "effect";
 import { createJiti } from "jiti/static";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
@@ -68,6 +83,53 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@mariozechner/pi-ai/compat": _bundledPiAiCompat,
 	"@mariozechner/pi-ai/oauth": _bundledPiAiOauth,
 	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
+	"@earendil-works/pi-coding-agent": _bundledPiCodingAgent,
+	"@earendil-works/pi-agent-core": _bundledPiAgentCore,
+	"@earendil-works/pi-tui": _bundledPiTui,
+	"@earendil-works/pi-ai": _bundledPiAiCompat,
+	"@earendil-works/pi-ai/base": _bundledPiAiCompatAsBase,
+	"@earendil-works/pi-ai/compat": _bundledPiAiCompat,
+	"@earendil-works/pi-ai/oauth": _bundledPiAiOauth,
+	effect: _bundledEffect,
+	"@piki/event-core": _bundledPiEventCore,
+	"@piki/generate-id": _bundledPiGenerateId,
+	"@piki/harness": _bundledPiHarness,
+	"@piki/logger": _bundledPiLogger,
+	"@piki/piki-client": _bundledPiPikiClient,
+	"@piki/ripgrep": _bundledPiRipgrep,
+	"@piki/roles": _bundledPiRoles,
+	"@piki/scratchpad": _bundledPiScratchpad,
+	"@piki/shell-classifier": _bundledPiShellClassifier,
+	"@piki/skills": _bundledPiSkills,
+	"@piki/storage": _bundledPiStorage,
+	"@piki/tracing": _bundledPiTracing,
+	"@piki/vcs": _bundledPiVcs,
+	"@earendil-works/pi-event-core": _bundledPiEventCore,
+	"@earendil-works/pi-generate-id": _bundledPiGenerateId,
+	"@earendil-works/pi-harness": _bundledPiHarness,
+	"@earendil-works/pi-logger": _bundledPiLogger,
+	"@earendil-works/pi-piki-client": _bundledPiPikiClient,
+	"@earendil-works/pi-ripgrep": _bundledPiRipgrep,
+	"@earendil-works/pi-roles": _bundledPiRoles,
+	"@earendil-works/pi-scratchpad": _bundledPiScratchpad,
+	"@earendil-works/pi-shell-classifier": _bundledPiShellClassifier,
+	"@earendil-works/pi-skills": _bundledPiSkills,
+	"@earendil-works/pi-storage": _bundledPiStorage,
+	"@earendil-works/pi-tracing": _bundledPiTracing,
+	"@earendil-works/pi-vcs": _bundledPiVcs,
+	"@mariozechner/pi-event-core": _bundledPiEventCore,
+	"@mariozechner/pi-generate-id": _bundledPiGenerateId,
+	"@mariozechner/pi-harness": _bundledPiHarness,
+	"@mariozechner/pi-logger": _bundledPiLogger,
+	"@mariozechner/pi-piki-client": _bundledPiPikiClient,
+	"@mariozechner/pi-ripgrep": _bundledPiRipgrep,
+	"@mariozechner/pi-roles": _bundledPiRoles,
+	"@mariozechner/pi-scratchpad": _bundledPiScratchpad,
+	"@mariozechner/pi-shell-classifier": _bundledPiShellClassifier,
+	"@mariozechner/pi-skills": _bundledPiSkills,
+	"@mariozechner/pi-storage": _bundledPiStorage,
+	"@mariozechner/pi-tracing": _bundledPiTracing,
+	"@mariozechner/pi-vcs": _bundledPiVcs,
 };
 
 const require = createRequire(import.meta.url);
@@ -87,6 +149,7 @@ function getAliases(): Record<string, string> {
 	const typeboxEntry = require.resolve("typebox");
 	const typeboxCompileEntry = require.resolve("typebox/compile");
 	const typeboxValueEntry = require.resolve("typebox/value");
+	const effectEntry = require.resolve("effect");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
@@ -105,6 +168,20 @@ function getAliases(): Record<string, string> {
 	// global API keep working at runtime until compat is removed.
 	const piAiCompatEntry = resolveWorkspaceOrImport("ai/dist/compat.js", "@piki/ai/compat");
 	const piAiOauthEntry = resolveWorkspaceOrImport("ai/dist/oauth.js", "@piki/ai/oauth");
+	const piEventCoreEntry = resolveWorkspaceOrImport("event-core/dist/index.js", "@piki/event-core");
+	const piGenerateIdEntry = resolveWorkspaceOrImport("generate-id/dist/index.js", "@piki/generate-id");
+	const piHarnessEntry = resolveWorkspaceOrImport("harness/dist/index.js", "@piki/harness");
+	const piLoggerEntry = resolveWorkspaceOrImport("logger/dist/index.js", "@piki/logger");
+	const piOrchestratorEntry = resolveWorkspaceOrImport("orchestrator/dist/index.js", "@piki/orchestrator");
+	const piPikiClientEntry = resolveWorkspaceOrImport("piki-client/dist/index.js", "@piki/piki-client");
+	const piRipgrepEntry = resolveWorkspaceOrImport("ripgrep/dist/index.js", "@piki/ripgrep");
+	const piRolesEntry = resolveWorkspaceOrImport("roles/dist/index.js", "@piki/roles");
+	const piScratchpadEntry = resolveWorkspaceOrImport("scratchpad/dist/index.js", "@piki/scratchpad");
+	const piShellClassifierEntry = resolveWorkspaceOrImport("shell-classifier/dist/index.js", "@piki/shell-classifier");
+	const piSkillsEntry = resolveWorkspaceOrImport("skills/dist/index.js", "@piki/skills");
+	const piStorageEntry = resolveWorkspaceOrImport("storage/dist/index.js", "@piki/storage");
+	const piTracingEntry = resolveWorkspaceOrImport("tracing/dist/index.js", "@piki/tracing");
+	const piVcsEntry = resolveWorkspaceOrImport("vcs/dist/index.js", "@piki/vcs");
 
 	_aliases = {
 		"@piki/coding-agent": piCodingAgentEntry,
@@ -115,12 +192,62 @@ function getAliases(): Record<string, string> {
 		"@piki/ai/compat": piAiCompatEntry,
 		"@piki/ai/oauth": piAiOauthEntry,
 		"@mariozechner/pi-coding-agent": piCodingAgentEntry,
+		"@earendil-works/pi-coding-agent": piCodingAgentEntry,
+		"@earendil-works/pi-agent-core": piAgentCoreEntry,
+		"@earendil-works/pi-tui": piTuiEntry,
+		"@earendil-works/pi-ai": piAiCompatEntry,
+		"@earendil-works/pi-ai/base": piAiCompatEntry,
+		"@earendil-works/pi-ai/compat": piAiCompatEntry,
+		"@earendil-works/pi-ai/oauth": piAiOauthEntry,
 		"@mariozechner/pi-agent-core": piAgentCoreEntry,
 		"@mariozechner/pi-tui": piTuiEntry,
 		"@mariozechner/pi-ai": piAiCompatEntry,
 		"@mariozechner/pi-ai/base": piAiCompatEntry,
 		"@mariozechner/pi-ai/compat": piAiCompatEntry,
 		"@mariozechner/pi-ai/oauth": piAiOauthEntry,
+		effect: effectEntry,
+		"@piki/event-core": piEventCoreEntry,
+		"@piki/generate-id": piGenerateIdEntry,
+		"@piki/harness": piHarnessEntry,
+		"@piki/logger": piLoggerEntry,
+		"@piki/orchestrator": piOrchestratorEntry,
+		"@piki/piki-client": piPikiClientEntry,
+		"@piki/ripgrep": piRipgrepEntry,
+		"@piki/roles": piRolesEntry,
+		"@piki/scratchpad": piScratchpadEntry,
+		"@piki/shell-classifier": piShellClassifierEntry,
+		"@piki/skills": piSkillsEntry,
+		"@piki/storage": piStorageEntry,
+		"@piki/tracing": piTracingEntry,
+		"@piki/vcs": piVcsEntry,
+		"@earendil-works/pi-event-core": piEventCoreEntry,
+		"@earendil-works/pi-generate-id": piGenerateIdEntry,
+		"@earendil-works/pi-harness": piHarnessEntry,
+		"@earendil-works/pi-logger": piLoggerEntry,
+		"@earendil-works/pi-orchestrator": piOrchestratorEntry,
+		"@earendil-works/pi-piki-client": piPikiClientEntry,
+		"@earendil-works/pi-ripgrep": piRipgrepEntry,
+		"@earendil-works/pi-roles": piRolesEntry,
+		"@earendil-works/pi-scratchpad": piScratchpadEntry,
+		"@earendil-works/pi-shell-classifier": piShellClassifierEntry,
+		"@earendil-works/pi-skills": piSkillsEntry,
+		"@earendil-works/pi-storage": piStorageEntry,
+		"@earendil-works/pi-tracing": piTracingEntry,
+		"@earendil-works/pi-vcs": piVcsEntry,
+		"@mariozechner/pi-event-core": piEventCoreEntry,
+		"@mariozechner/pi-generate-id": piGenerateIdEntry,
+		"@mariozechner/pi-harness": piHarnessEntry,
+		"@mariozechner/pi-logger": piLoggerEntry,
+		"@mariozechner/pi-orchestrator": piOrchestratorEntry,
+		"@mariozechner/pi-piki-client": piPikiClientEntry,
+		"@mariozechner/pi-ripgrep": piRipgrepEntry,
+		"@mariozechner/pi-roles": piRolesEntry,
+		"@mariozechner/pi-scratchpad": piScratchpadEntry,
+		"@mariozechner/pi-shell-classifier": piShellClassifierEntry,
+		"@mariozechner/pi-skills": piSkillsEntry,
+		"@mariozechner/pi-storage": piStorageEntry,
+		"@mariozechner/pi-tracing": piTracingEntry,
+		"@mariozechner/pi-vcs": piVcsEntry,
 		typebox: typeboxEntry,
 		"typebox/compile": typeboxCompileEntry,
 		"typebox/value": typeboxValueEntry,

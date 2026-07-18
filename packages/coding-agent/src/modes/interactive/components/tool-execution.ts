@@ -8,6 +8,8 @@ import { theme } from "../theme/theme.ts";
 export interface ToolExecutionOptions {
 	showImages?: boolean;
 	imageWidthCells?: number;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 export class ToolExecutionComponent extends Container {
@@ -54,7 +56,9 @@ export class ToolExecutionComponent extends Container {
 		this.toolCallId = toolCallId;
 		this.args = args;
 		this.toolDefinition = toolDefinition;
-		this.builtInToolDefinition = createAllToolDefinitions(cwd)[toolName as ToolName];
+		this.builtInToolDefinition = createAllToolDefinitions(cwd, { scratchpadPath: options.scratchpadPath ?? "" })[
+			toolName as ToolName
+		];
 		this.showImages = options.showImages ?? true;
 		this.imageWidthCells = options.imageWidthCells ?? 60;
 		this.ui = ui;

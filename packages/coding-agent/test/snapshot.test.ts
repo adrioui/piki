@@ -5,16 +5,19 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	createSnapshot,
+	DEFAULT_SNAPSHOT_RETENTION,
+	deleteSnapshotsForSession,
 	diffSnapshotAgainstWorktree,
 	isGitRepo,
 	isSafeVcsWorkspace,
 	listSnapshots,
+	pruneSnapshotRefs,
 	restoreSnapshot,
 } from "../src/core/snapshot.ts";
 
@@ -270,5 +273,117 @@ describe("diffSnapshotAgainstWorktree", () => {
 		const result = diffSnapshotAgainstWorktree(repoDir, oid!);
 		expect(result.changedFiles).toContain("readme.md");
 		expect(result.changedFiles).toContain("new-file.txt");
+	});
+});
+
+describe("createSnapshot retention pruning", () => {
+	let repoDir: string;
+
+	beforeAll(() => {
+		repoDir = createTempGitRepo();
+	});
+
+	afterAll(() => {
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+
+	it("auto-prunes oldest refs when exceeding retention", () => {
+		const sessionId = "retention-test";
+		// Create 5 snapshots with retention 2; only the newest 2 should remain.
+		for (let i = 0; i < 5; i++) {
+			const oid = createSnapshot(repoDir, sessionId, `snap-${i}`, 2);
+			expect(oid).toBeTruthy();
+		}
+
+		const entries = listSnapshots(repoDir, sessionId);
+		expect(entries.length).toBe(2);
+		const messageIds = entries.map((e) => e.messageId);
+		expect(messageIds).toContain("snap-3");
+		expect(messageIds).toContain("snap-4");
+		expect(messageIds).not.toContain("snap-0");
+		expect(messageIds).not.toContain("snap-1");
+	});
+
+	it("keeps the freshly written redo ref during pruning", () => {
+		const sessionId = "retention-redo-test";
+		createSnapshot(repoDir, sessionId, "snap-0", 1);
+		const redoOid = createSnapshot(repoDir, sessionId, "redo-snap", 1);
+		const entries = listSnapshots(repoDir, sessionId);
+		expect(entries.length).toBe(1);
+		expect(entries[0]!.messageId).toBe("redo-snap");
+		expect(entries[0]!.treeOID).toBe(redoOid);
+	});
+});
+
+describe("pruneSnapshotRefs", () => {
+	let repoDir: string;
+
+	beforeAll(() => {
+		repoDir = createTempGitRepo();
+	});
+
+	afterAll(() => {
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+
+	it("removes the oldest refs and keeps the newest", () => {
+		const sessionId = "prune-test";
+		for (let i = 0; i < 5; i++) {
+			const oid = createSnapshot(repoDir, sessionId, `snap-${i}`);
+			expect(oid).toBeTruthy();
+		}
+		expect(listSnapshots(repoDir, sessionId).length).toBe(5);
+
+		pruneSnapshotRefs(repoDir, sessionId, 3);
+
+		const entries = listSnapshots(repoDir, sessionId);
+		expect(entries.length).toBe(3);
+		const messageIds = entries.map((e) => e.messageId);
+		expect(messageIds).toEqual(["snap-2", "snap-3", "snap-4"]);
+	});
+
+	it("is a no-op when under the retention limit", () => {
+		const sessionId = "prune-under-test";
+		for (let i = 0; i < 2; i++) {
+			const oid = createSnapshot(repoDir, sessionId, `snap-${i}`);
+			expect(oid).toBeTruthy();
+		}
+		pruneSnapshotRefs(repoDir, sessionId, DEFAULT_SNAPSHOT_RETENTION);
+		expect(listSnapshots(repoDir, sessionId).length).toBe(2);
+	});
+});
+
+describe("deleteSnapshotsForSession", () => {
+	let repoDir: string;
+
+	beforeAll(() => {
+		repoDir = createTempGitRepo();
+	});
+
+	afterAll(() => {
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+
+	it("removes the session namespace directory and all refs", () => {
+		const sessionId = "delete-test";
+		createSnapshot(repoDir, sessionId, "snap-0");
+		createSnapshot(repoDir, sessionId, "snap-1");
+		expect(listSnapshots(repoDir, sessionId).length).toBe(2);
+
+		deleteSnapshotsForSession(repoDir, sessionId);
+
+		expect(listSnapshots(repoDir, sessionId).length).toBe(0);
+		const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], {
+			cwd: repoDir,
+			stdio: "pipe",
+			encoding: "utf-8",
+		}).trim();
+		const nsDir = join(repoDir, gitDir, "refs", "piki", "snapshots", sessionId);
+		expect(existsSync(nsDir)).toBe(false);
+	});
+
+	it("is a no-op for an unknown session id", () => {
+		expect(() => deleteSnapshotsForSession(repoDir, "does-not-exist")).not.toThrow();
+		expect(listSnapshots(repoDir, "does-not-exist").length).toBe(0);
 	});
 });

@@ -31,6 +31,12 @@ export {
 	type FindToolOptions,
 } from "./find.ts";
 export {
+	createGitTool,
+	createGitToolDefinition,
+	type GitToolDetails,
+	type GitToolInput,
+} from "./git.ts";
+export {
 	createGrepTool,
 	createGrepToolDefinition,
 	type GrepOperations,
@@ -66,6 +72,7 @@ export {
 	truncateLine,
 	truncateTail,
 } from "./truncate.ts";
+export { createViewTool, createViewToolDefinition, type ViewToolInput, type ViewToolOptions } from "./view.ts";
 export { createWebFetchToolDefinition, type WebFetchInput } from "./web-fetch.ts";
 export { createWebSearchToolDefinition, type WebSearchInput } from "./web-search.ts";
 export {
@@ -88,18 +95,47 @@ import {
 import { type CompactToolOptions, createCompactToolDefinition } from "./compact.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
+import { createGitToolDefinition } from "./git.ts";
 import { createGrepTool, createGrepToolDefinition, type GrepToolOptions } from "./grep.ts";
 import { createLsTool, createLsToolDefinition, type LsToolOptions } from "./ls.ts";
 import { createQueryImageToolDefinition, type QueryImageToolOptions } from "./query-image.ts";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.ts";
 import { createSkillToolDefinition, type SkillToolOptions } from "./skill.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { createViewToolDefinition, type ViewToolOptions } from "./view.ts";
 import { createWebFetchToolDefinition } from "./web-fetch.ts";
 import { createWebSearchToolDefinition } from "./web-search.ts";
 import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } from "./write.ts";
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
+
+/** Role-control, task, and goal tool names created via `createRoleControlTool`. */
+export type RoleControlToolName =
+	| "spawn_worker"
+	| "kill_worker"
+	| "message_worker"
+	| "reassign_worker"
+	| "create_task"
+	| "update_task"
+	| "finish_goal"
+	| "message_advisor"
+	| "pass"
+	| "escalate";
+
+/**
+ * Full set of tool names the session can register. Core tools (returned by the
+ * `createAll*` maps) plus role-control/task/goal tools.
+ */
+export type AllToolName =
+	| ToolName
+	| RoleControlToolName
+	| "scratchpad_save"
+	| "scratchpad_load"
+	| "checkpoint_changes"
+	| "checkpoint_rollback"
+	| "restore_snapshot";
+/** Core tool names created by `createTool`/`createToolDefinition` and returned by the `createAll*` maps. */
 export type ToolName =
 	| "read"
 	| "bash"
@@ -108,13 +144,15 @@ export type ToolName =
 	| "grep"
 	| "find"
 	| "ls"
+	| "git"
 	| "shell"
 	| "compact"
 	| "web_search"
 	| "web_fetch"
 	| "query_image"
-	| "skill";
-export const allToolNames: Set<ToolName> = new Set([
+	| "skill"
+	| "view";
+export const allToolNames: Set<AllToolName> = new Set([
 	"read",
 	"bash",
 	"edit",
@@ -122,12 +160,29 @@ export const allToolNames: Set<ToolName> = new Set([
 	"grep",
 	"find",
 	"ls",
+	"git",
 	"shell",
 	"compact",
 	"web_search",
 	"web_fetch",
 	"query_image",
 	"skill",
+	"view",
+	"scratchpad_save",
+	"scratchpad_load",
+	"checkpoint_changes",
+	"checkpoint_rollback",
+	"restore_snapshot",
+	"spawn_worker",
+	"kill_worker",
+	"message_worker",
+	"reassign_worker",
+	"create_task",
+	"update_task",
+	"finish_goal",
+	"message_advisor",
+	"pass",
+	"escalate",
 ]);
 
 export interface ToolsOptions {
@@ -144,6 +199,8 @@ export interface ToolsOptions {
 	compact?: CompactToolOptions;
 	/** Options for the query_image tool. */
 	queryImage?: QueryImageToolOptions;
+	/** Options for the view tool. */
+	view?: ViewToolOptions;
 	/** Options for the skill tool. */
 	skill?: SkillToolOptions;
 	/** Options for the web_search tool. */
@@ -155,19 +212,21 @@ export interface ToolsOptions {
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
 	switch (toolName) {
 		case "read":
-			return createReadToolDefinition(cwd, options?.read);
+			return createReadToolDefinition(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "bash":
 			return createBashToolDefinition(cwd, options?.bash);
 		case "edit":
-			return createEditToolDefinition(cwd, options?.edit);
+			return createEditToolDefinition(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "write":
-			return createWriteToolDefinition(cwd, options?.write);
+			return createWriteToolDefinition(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "grep":
-			return createGrepToolDefinition(cwd, options?.grep);
+			return createGrepToolDefinition(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "find":
-			return createFindToolDefinition(cwd, options?.find);
+			return createFindToolDefinition(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "ls":
-			return createLsToolDefinition(cwd, options?.ls);
+			return createLsToolDefinition(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" });
+		case "git":
+			return createGitToolDefinition(cwd);
 		case "shell":
 			return createShellToolDefinition(cwd, options?.bash);
 		case "compact":
@@ -178,6 +237,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createWebFetchToolDefinition();
 		case "query_image":
 			return createQueryImageToolDefinition(cwd, options?.queryImage);
+		case "view":
+			return createViewToolDefinition(cwd, { ...options?.view, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "skill":
 			return createSkillToolDefinition(options?.skill);
 		default:
@@ -188,19 +249,21 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptions): Tool {
 	switch (toolName) {
 		case "read":
-			return createReadTool(cwd, options?.read);
+			return createReadTool(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "bash":
 			return createBashTool(cwd, options?.bash);
 		case "edit":
-			return createEditTool(cwd, options?.edit);
+			return createEditTool(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "write":
-			return createWriteTool(cwd, options?.write);
+			return createWriteTool(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "grep":
-			return createGrepTool(cwd, options?.grep);
+			return createGrepTool(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "find":
-			return createFindTool(cwd, options?.find);
+			return createFindTool(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" });
 		case "ls":
-			return createLsTool(cwd, options?.ls);
+			return createLsTool(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" });
+		case "git":
+			return wrapDefined(createGitToolDefinition(cwd));
 		case "shell":
 			return createShellTool(cwd, options?.bash);
 		case "compact":
@@ -211,6 +274,10 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return wrapDefined(createWebFetchToolDefinition());
 		case "query_image":
 			return wrapDefined(createQueryImageToolDefinition(cwd, options?.queryImage));
+		case "view":
+			return wrapDefined(
+				createViewToolDefinition(cwd, { ...options?.view, scratchpadPath: options?.scratchpadPath ?? "" }),
+			);
 		case "skill":
 			return wrapDefined(createSkillToolDefinition(options?.skill));
 		default:
@@ -225,72 +292,81 @@ function wrapDefined(def: ToolDefinition<any, any>): Tool {
 
 export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
-		createReadToolDefinition(cwd, options?.read),
+		createReadToolDefinition(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
 		createBashToolDefinition(cwd, options?.bash),
-		createEditToolDefinition(cwd, options?.edit),
-		createWriteToolDefinition(cwd, options?.write),
+		createEditToolDefinition(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createWriteToolDefinition(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createGitToolDefinition(cwd),
 	];
 }
 
 export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOptions): ToolDef[] {
 	return [
-		createReadToolDefinition(cwd, options?.read),
-		createGrepToolDefinition(cwd, options?.grep),
-		createFindToolDefinition(cwd, options?.find),
-		createLsToolDefinition(cwd, options?.ls),
+		createReadToolDefinition(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createGrepToolDefinition(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createFindToolDefinition(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createLsToolDefinition(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createGitToolDefinition(cwd),
 	];
 }
 
 export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): Record<ToolName, ToolDef> {
 	return {
-		read: createReadToolDefinition(cwd, options?.read),
+		read: createReadToolDefinition(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
 		bash: createBashToolDefinition(cwd, options?.bash),
-		edit: createEditToolDefinition(cwd, options?.edit),
-		write: createWriteToolDefinition(cwd, options?.write),
-		grep: createGrepToolDefinition(cwd, options?.grep),
-		find: createFindToolDefinition(cwd, options?.find),
-		ls: createLsToolDefinition(cwd, options?.ls),
+		edit: createEditToolDefinition(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" }),
+		write: createWriteToolDefinition(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" }),
+		grep: createGrepToolDefinition(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" }),
+		find: createFindToolDefinition(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" }),
+		ls: createLsToolDefinition(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" }),
+		git: createGitToolDefinition(cwd),
 		shell: createShellToolDefinition(cwd, options?.bash),
 		compact: createCompactToolDefinition(options?.compact),
 		web_search: createWebSearchToolDefinition(),
 		web_fetch: createWebFetchToolDefinition(),
 		query_image: createQueryImageToolDefinition(cwd, options?.queryImage),
 		skill: createSkillToolDefinition(options?.skill),
+		view: createViewToolDefinition(cwd, { ...options?.view, scratchpadPath: options?.scratchpadPath ?? "" }),
 	};
 }
 
 export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
-		createReadTool(cwd, options?.read),
+		createReadTool(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
 		createBashTool(cwd, options?.bash),
-		createEditTool(cwd, options?.edit),
-		createWriteTool(cwd, options?.write),
+		createEditTool(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createWriteTool(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" }),
 	];
 }
 
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return [
-		createReadTool(cwd, options?.read),
-		createGrepTool(cwd, options?.grep),
-		createFindTool(cwd, options?.find),
-		createLsTool(cwd, options?.ls),
+		createReadTool(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createGrepTool(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createFindTool(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" }),
+		createLsTool(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" }),
+		wrapDefined(createGitToolDefinition(cwd)),
 	];
 }
 
 export function createAllTools(cwd: string, options?: ToolsOptions): Record<ToolName, Tool> {
 	return {
-		read: createReadTool(cwd, options?.read),
+		read: createReadTool(cwd, { ...options?.read, scratchpadPath: options?.scratchpadPath ?? "" }),
 		bash: createBashTool(cwd, options?.bash),
-		edit: createEditTool(cwd, options?.edit),
-		write: createWriteTool(cwd, options?.write),
-		grep: createGrepTool(cwd, options?.grep),
-		find: createFindTool(cwd, options?.find),
-		ls: createLsTool(cwd, options?.ls),
+		edit: createEditTool(cwd, { ...options?.edit, scratchpadPath: options?.scratchpadPath ?? "" }),
+		write: createWriteTool(cwd, { ...options?.write, scratchpadPath: options?.scratchpadPath ?? "" }),
+		grep: createGrepTool(cwd, { ...options?.grep, scratchpadPath: options?.scratchpadPath ?? "" }),
+		find: createFindTool(cwd, { ...options?.find, scratchpadPath: options?.scratchpadPath ?? "" }),
+		ls: createLsTool(cwd, { ...options?.ls, scratchpadPath: options?.scratchpadPath ?? "" }),
+		git: wrapDefined(createGitToolDefinition(cwd)),
 		shell: createShellTool(cwd, options?.bash),
 		compact: wrapDefined(createCompactToolDefinition(options?.compact)),
 		web_search: wrapDefined(createWebSearchToolDefinition()),
 		web_fetch: wrapDefined(createWebFetchToolDefinition()),
 		query_image: wrapDefined(createQueryImageToolDefinition(cwd, options?.queryImage)),
 		skill: wrapDefined(createSkillToolDefinition(options?.skill)),
+		view: wrapDefined(
+			createViewToolDefinition(cwd, { ...options?.view, scratchpadPath: options?.scratchpadPath ?? "" }),
+		),
 	};
 }

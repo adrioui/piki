@@ -3,13 +3,6 @@
  */
 
 export {
-	DEFAULT_MEMORY_CAPACITY,
-	type MemoryEntry,
-	MemoryStorage,
-	type MemoryStorageShape,
-	makeMemoryStorageLayer,
-} from "../effect/memory-storage.ts";
-export {
 	AgentSession,
 	type AgentSessionConfig,
 	type AgentSessionEvent,

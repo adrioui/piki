@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { Context, Data, Effect, Layer } from "effect";
+import { atomicWriteFile } from "./atomic-write.ts";
 import { ProjectStorageTag } from "./project-storage.ts";
 
 const DEFAULT_MEMORY_CONTENT = "# Project Memory\n";
@@ -23,8 +23,7 @@ function makeMemoryStorage(memoryFile: string): MemoryStorage {
 	const write = (content: string) =>
 		Effect.tryPromise({
 			try: async () => {
-				await mkdir(dirname(memoryFile), { recursive: true, mode: 0o700 });
-				await writeFile(memoryFile, content, "utf8");
+				await atomicWriteFile(memoryFile, content);
 			},
 			catch: (cause) =>
 				new MemoryStorageError({ operation: "write", message: `Failed to write memory ${memoryFile}`, cause }),

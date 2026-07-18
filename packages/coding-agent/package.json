@@ -43,6 +43,7 @@
 		"@piki/agent-core": "^0.80.2",
 		"@piki/ai": "^0.80.2",
 		"@piki/event-core": "^0.80.2",
+		"@piki/skills": "^0.80.2",
 		"@piki/tui": "^0.80.2",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"chalk": "5.6.2",

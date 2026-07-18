@@ -19,8 +19,8 @@ export class ErrorRepeatGuard {
 		this.threshold = options.threshold ?? DEFAULT_ERROR_REPEAT_THRESHOLD;
 	}
 
-	recordError(toolName: string, args: unknown, errorText: string): ErrorRepeatGuardResult {
-		const fingerprint = `${toolName}:${fingerprintArgs(args)}:${normalizeError(errorText)}`;
+	recordError(toolName: string, args: unknown, errorText: string, category?: string): ErrorRepeatGuardResult {
+		const fingerprint = `${toolName}:${fingerprintArgs(args)}:${normalizeError(errorText)}:${category ?? ""}`;
 		const repeatCount = (this.counts.get(fingerprint) ?? 0) + 1;
 		this.counts.set(fingerprint, repeatCount);
 		return {

@@ -8,7 +8,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { pathExists, resolveToCwd } from "./path-utils.ts";
+import { pathExists, resolveToolPath } from "./path-utils.ts";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
@@ -47,13 +47,20 @@ export interface FindOperations {
 
 const defaultFindOperations: FindOperations = {
 	exists: pathExists,
-	// This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
-	glob: () => [],
+	// The default path always uses the fd subprocess in execute(); this is only
+	// invoked when a caller supplies custom operations with their own glob().
+	glob: () => {
+		throw new Error(
+			"defaultFindOperations.glob is not implemented; provide custom operations to delegate glob search",
+		);
+	},
 };
 
 export interface FindToolOptions {
 	/** Custom operations for find. Default: local filesystem plus fd */
 	operations?: FindOperations;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 function formatFindCall(args: { pattern: string; path?: string; limit?: number } | undefined, theme: Theme): string {
@@ -111,6 +118,7 @@ export function createFindToolDefinition(
 	options?: FindToolOptions,
 ): ToolDefinition<typeof findSchema, FindToolDetails | undefined> {
 	const customOps = options?.operations;
+	const scratchpadPath = options?.scratchpadPath ?? "";
 	return {
 		name: "find",
 		label: "find",
@@ -147,7 +155,7 @@ export function createFindToolDefinition(
 
 				(async () => {
 					try {
-						const searchPath = resolveToCwd(searchDir || ".", cwd);
+						const searchPath = resolveToolPath(searchDir || ".", cwd, scratchpadPath);
 						const effectiveLimit = limit ?? DEFAULT_LIMIT;
 						const ops = customOps ?? defaultFindOperations;
 

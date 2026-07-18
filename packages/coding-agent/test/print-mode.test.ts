@@ -140,15 +140,19 @@ describe("runPrintMode", () => {
 			expect(exitCode).toBe(0);
 			expect(existsSync(atifPath)).toBe(true);
 			const exported = JSON.parse(readFileSync(atifPath, "utf-8")) as {
-				format?: string;
-				version?: number;
+				schema_version?: string;
+				trajectory_id?: string;
+				agent?: { name?: string; version?: string; tool_definitions?: unknown[] };
 				steps?: unknown[];
-				vendor?: { piki?: { entries?: unknown[] } };
+				final_metrics?: unknown;
 			};
-			expect(exported.format).toBe("atif");
-			expect(exported.version).toBe(1.7);
+			expect(exported.schema_version).toBe("ATIF-v1.7");
+			expect(exported.trajectory_id).toBe("main");
+			expect(exported.agent?.name).toBe("piki");
+			expect(exported.agent?.version).toBe("1.0.0");
+			expect(Array.isArray(exported.agent?.tool_definitions)).toBe(true);
 			expect(exported.steps).toEqual([]);
-			expect(exported.vendor?.piki?.entries).toEqual([]);
+			expect(exported.final_metrics).toBeDefined();
 		} finally {
 			rmSync(tempDir, { recursive: true, force: true });
 		}
@@ -169,5 +173,37 @@ describe("runPrintMode", () => {
 		expect(errorSpy).toHaveBeenCalledWith("provider failure");
 		expect(session.extensionRunner.emit).toHaveBeenCalledTimes(1);
 		expect(session.extensionRunner.emit).toHaveBeenCalledWith({ type: "session_shutdown", reason: "quit" });
+	});
+
+	it("registers a SIGINT handler that performs graceful shutdown with exit code 130", async () => {
+		const runtimeHost = createRuntimeHost(createAssistantMessage({ text: "done" }));
+		const { session } = runtimeHost;
+		const { killTrackedDetachedChildren } = await import("../src/utils/shell.ts");
+
+		session.prompt = vi.fn(async () => {
+			// Simulate Ctrl+C arriving mid-run: trigger registered SIGINT listeners.
+			const listeners = process.listeners("SIGINT");
+			expect(listeners.length).toBeGreaterThan(0);
+			for (const listener of listeners) {
+				(listener as (signal: NodeJS.Signals) => void)("SIGINT");
+			}
+			// Prevent the real process.exit from ending the test runner.
+			const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+			// Wait a tick for the async dispose path to invoke process.exit.
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(killTrackedDetachedChildren).toHaveBeenCalled();
+			expect(session.extensionRunner.emit).toHaveBeenCalled();
+			expect(exitSpy).toHaveBeenCalledWith(130);
+			exitSpy.mockRestore();
+			throw new Error("aborted by signal");
+		}) as unknown as typeof session.prompt;
+
+		const exitCode = await runPrintMode(runtimeHost as unknown as Parameters<typeof runPrintMode>[0], {
+			mode: "text",
+			initialMessage: "Say done",
+		});
+
+		// The thrown error from the simulated abort becomes exit code 1.
+		expect(exitCode).toBe(1);
 	});
 });

@@ -40,7 +40,13 @@ export interface AutoDetachResult {
  * @param shellPath - Optional explicit shell path
  * @returns Metadata about the detached process
  */
-export function spawnDetached(command: string, cwd: string, reason: string, shellPath?: string): AutoDetachResult {
+export function spawnDetached(
+	command: string,
+	cwd: string,
+	reason: string,
+	shellPath?: string,
+	scratchpadPath?: string,
+): AutoDetachResult {
 	const shellConfig = getShellConfig(shellPath);
 	const id = randomBytes(8).toString("hex");
 	const logPath = join(tmpdir(), `pi-detached-${id}.log`);
@@ -53,7 +59,7 @@ export function spawnDetached(command: string, cwd: string, reason: string, shel
 		{
 			cwd,
 			detached: process.platform !== "win32",
-			env: { ...getShellEnv(), NO_COLOR: "1", PROJECT_ROOT: cwd, M: process.env.M ?? "" },
+			env: { ...getShellEnv(undefined, scratchpadPath), NO_COLOR: "1", PROJECT_ROOT: cwd },
 			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 			windowsHide: true,
 		},

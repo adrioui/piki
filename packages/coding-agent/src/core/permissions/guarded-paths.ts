@@ -9,6 +9,20 @@
  * Guarded path patterns (glob-style).
  * These paths are protected from mutation by default.
  */
+/**
+ * Tools that can mutate the filesystem / repo state. Guarded-path checks are
+ * applied to these tools so workers and the leader share one definition.
+ */
+export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
+	"edit",
+	"write",
+	"bash",
+	"shell",
+	"edit-diff",
+	"restore_snapshot",
+	"checkpoint_rollback",
+]);
+
 export const GUARDED_PATH_PATTERNS: readonly string[] = [
 	// Environment files
 	"**/.env*",

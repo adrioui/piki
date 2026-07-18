@@ -1,13 +1,19 @@
 import type { AgentMessage, StreamFn } from "@piki/agent-core";
+import { fauxAssistantMessage, fauxToolCall } from "@piki/ai";
 import type { AssistantMessage, Usage } from "@piki/ai/compat";
 import { getModel } from "@piki/ai/compat";
-import { readFileSync } from "fs";
+import { COMPACT_MAX_FILE_CHARS, COMPACT_MAX_FILES, OUTPUT_TOKEN_RESERVE } from "@piki/event-core";
+import { readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	buildKeyFilesSection,
+	COMPACTION_TIMEOUT_MS,
 	type CompactionSettings,
 	calculateContextTokens,
 	compact,
+	computeContinuationCharThreshold,
+	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextChars,
 	estimateContextTokens,
@@ -29,6 +35,7 @@ import {
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
 } from "../src/core/session-manager.ts";
+import { createHarness, type Harness, type HarnessOptions } from "./suite/harness.ts";
 
 // ============================================================================
 // Test fixtures
@@ -293,6 +300,27 @@ describe("estimateContextTokens", () => {
 		expect(estimate.trailingTokens).toBeGreaterThan(0);
 		expect(estimate.tokens).toBe(150 + estimate.trailingTokens);
 	});
+
+	it("reports source: 'heuristic' when no usage block exists", () => {
+		const messages: AgentMessage[] = [createUserMessage("Hello"), createUserMessage("World")];
+
+		const estimate = estimateContextTokens(messages);
+
+		expect(estimate.source).toBe("heuristic");
+		expect(estimate.lastUsageIndex).toBeNull();
+		expect(estimate.usageTokens).toBe(0);
+	});
+
+	it("reports source: 'usage' when a usage block anchors the estimate", () => {
+		const messages: AgentMessage[] = [
+			createUserMessage("Hello"),
+			createAssistantMessage("Hi", createMockUsage(100, 50)),
+		];
+
+		const estimate = estimateContextTokens(messages);
+
+		expect(estimate.source).toBe("usage");
+	});
 });
 
 describe("estimateContextChars", () => {
@@ -308,10 +336,11 @@ describe("shouldCompact", () => {
 			enabled: true,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
+			keepRatio: 0.1,
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(true);
-		expect(shouldCompact(89000, 100000, settings)).toBe(false);
+		expect(shouldCompact(80000, 100000, settings)).toBe(false);
 	});
 
 	it("should return false when disabled", () => {
@@ -319,9 +348,21 @@ describe("shouldCompact", () => {
 			enabled: false,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
+			keepRatio: 0.1,
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(false);
+	});
+});
+
+describe("branch summary reservation", () => {
+	it("uses the shared OUTPUT_TOKEN_RESERVE headroom, not the old 16384", () => {
+		expect(OUTPUT_TOKEN_RESERVE).toBe(8192);
+		// generateBranchSummary falls back to OUTPUT_TOKEN_RESERVE when callers
+		// omit reserveTokens, so the branch token budget matches compaction.
+		const contextWindow = 128000;
+		const tokenBudget = contextWindow - OUTPUT_TOKEN_RESERVE;
+		expect(tokenBudget).toBe(contextWindow - 8192);
 	});
 });
 
@@ -554,9 +595,9 @@ describe("summarization prompts", () => {
 			createPromptCapturingStreamFn(capturedPrompts),
 		);
 
-		expect(capturedPrompts[0]).toContain("Preserve failed attempts, negative results");
-		expect(capturedPrompts[0]).toContain("Do not mark work as done unless");
-		expect(capturedPrompts[0]).toContain("Preserve exact validation commands and outcomes");
+		expect(capturedPrompts[0]).toContain("## Reflection");
+		expect(capturedPrompts[0]).toContain("## Critical Context");
+		expect(capturedPrompts[0]).toContain("What to avoid repeating");
 	});
 
 	it("instructs updated summaries to preserve prior negative results", async () => {
@@ -576,8 +617,8 @@ describe("summarization prompts", () => {
 			createPromptCapturingStreamFn(capturedPrompts),
 		);
 
-		expect(capturedPrompts[0]).toContain("Preserve failed attempts, negative results");
-		expect(capturedPrompts[0]).toContain("from both old and new context");
+		expect(capturedPrompts[0]).toContain("## Reflection");
+		expect(capturedPrompts[0]).toContain("Preserve previous reflection content");
 		expect(capturedPrompts[0]).toContain("<previous-summary>");
 	});
 
@@ -614,7 +655,7 @@ describe("Large session fixture", () => {
 
 	it("should find cut point in large session", () => {
 		const entries = loadLargeSessionEntries();
-		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens);
+		const result = findCutPoint(entries, 0, entries.length, DEFAULT_COMPACTION_SETTINGS.keepRecentTokens ?? 20000);
 
 		// Cut point should be at a message entry (user or assistant)
 		expect(entries[result.firstKeptEntryIndex].type).toBe("message");
@@ -628,6 +669,89 @@ describe("Large session fixture", () => {
 
 		expect(loaded.messages.length).toBeGreaterThan(100);
 		expect(loaded.model).not.toBeNull();
+	});
+});
+
+// ============================================================================
+// Key-file inlining
+// ============================================================================
+
+describe("buildKeyFilesSection", () => {
+	const createdFiles: string[] = [];
+	const originalCwd = process.cwd();
+
+	beforeEach(() => {
+		for (const f of createdFiles) {
+			try {
+				unlinkSync(f);
+			} catch {
+				// ignore
+			}
+		}
+		createdFiles.length = 0;
+	});
+
+	afterAll(() => {
+		process.chdir(originalCwd);
+		for (const f of createdFiles) {
+			try {
+				unlinkSync(f);
+			} catch {
+				// ignore
+			}
+		}
+	});
+
+	function writeTempFile(name: string, contents: string): string {
+		const abs = join(originalCwd, name);
+		writeFileSync(abs, contents, "utf-8");
+		createdFiles.push(abs);
+		return name; // path relative to cwd, where tests run from originalCwd
+	}
+
+	it("returns empty string when there are no file operations", async () => {
+		const fileOps = createFileOps();
+		const result = await buildKeyFilesSection(fileOps, originalCwd);
+		expect(result).toBe("");
+	});
+
+	it("inlines file contents under a ## Key Files block", async () => {
+		const name = writeTempFile("piki-kf-a.txt", "hello world");
+		const fileOps = createFileOps();
+		fileOps.read.add(name);
+		const result = await buildKeyFilesSection(fileOps, originalCwd);
+		expect(result).toContain("## Key Files");
+		expect(result).toContain(`### ${name}`);
+		expect(result).toContain("hello world");
+	});
+
+	it("skips paths that cannot be read", async () => {
+		const fileOps = createFileOps();
+		fileOps.read.add("piki-kf-does-not-exist.txt");
+		const result = await buildKeyFilesSection(fileOps, originalCwd);
+		expect(result).toBe("");
+	});
+
+	it("truncates files longer than COMPACT_MAX_FILE_CHARS", async () => {
+		const big = "x".repeat(COMPACT_MAX_FILE_CHARS + 500);
+		const name = writeTempFile("piki-kf-big.txt", big);
+		const fileOps = createFileOps();
+		fileOps.edited.add(name);
+		const result = await buildKeyFilesSection(fileOps, originalCwd);
+		// The inlined block must not contain the full length; truncation drops the tail.
+		expect(result).not.toContain(big);
+		expect(result).toContain("## Key Files");
+	});
+
+	it("caps inlined files at COMPACT_MAX_FILES", async () => {
+		const fileOps = createFileOps();
+		for (let i = 0; i < COMPACT_MAX_FILES + 5; i++) {
+			const name = writeTempFile(`piki-kf-c${i}.txt`, `content-${i}`);
+			fileOps.written.add(name);
+		}
+		const result = await buildKeyFilesSection(fileOps, originalCwd);
+		const blockCount = (result.match(/### /g) ?? []).length;
+		expect(blockCount).toBe(COMPACT_MAX_FILES);
 	});
 });
 
@@ -687,4 +811,186 @@ describe.skipIf(!process.env.ANTHROPIC_OAUTH_TOKEN)("LLM summarization", () => {
 		console.log("Original messages:", loaded.messages.length);
 		console.log("After compaction:", reloaded.messages.length);
 	}, 60000);
+});
+
+// ============================================================================
+// Crash-proof compaction lifecycle (mrkkpimo root cause)
+// ============================================================================
+
+type SessionWithCompactionInternals = {
+	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+	_compactionAbortController?: unknown;
+};
+
+describe("computeContinuationCharThreshold scaling", () => {
+	it("returns at least the legacy 100k floor for small windows", () => {
+		expect(computeContinuationCharThreshold(undefined)).toBeGreaterThanOrEqual(100_000);
+		expect(computeContinuationCharThreshold(100_000)).toBeGreaterThanOrEqual(100_000);
+		expect(computeContinuationCharThreshold(200_000)).toBeGreaterThanOrEqual(100_000);
+	});
+
+	it("scales upward for a 1M window (~0.9 * (1M - 8192) * 4 chars)", () => {
+		const scaled = computeContinuationCharThreshold(1_000_000);
+		expect(scaled).toBeGreaterThan(100_000);
+		// 0.9 * (1_000_000 - 8192) * 4 ≈ 3_589_708
+		expect(scaled).toBe(Math.max(100_000, Math.floor((1_000_000 * 4 - 8192 * 4) * 0.9)));
+		expect(scaled).toBeGreaterThan(3_000_000);
+	});
+});
+
+describe("crash-proof compaction lifecycle", () => {
+	const harnesses: Harness[] = [];
+
+	afterEach(() => {
+		while (harnesses.length > 0) {
+			harnesses.pop()?.cleanup();
+		}
+	});
+
+	async function buildHarnessWithHistory(
+		keepRecentTokens = 1,
+		extensionFactories?: HarnessOptions["extensionFactories"],
+	): Promise<Harness> {
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 200_000, maxTokens: 4096 }],
+			settings: { compaction: { enabled: true, keepRecentTokens } },
+			extensionFactories,
+		});
+		harness.setResponses([fauxAssistantMessage("first"), fauxAssistantMessage("second")]);
+		await harness.session.prompt("first");
+		await harness.session.prompt("second");
+		return harness;
+	}
+
+	it("captures the compact tool call during auto-compaction", async () => {
+		const harness = await buildHarnessWithHistory();
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall("compact", {
+					summary: "captured summary",
+					reflection: "captured reflection",
+					files: [],
+				}),
+				{ stopReason: "toolUse" },
+			),
+		]);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await expect(internals._runAutoCompaction("threshold", false)).resolves.toBe(false);
+
+		const compaction = harness.sessionManager.getEntries().find((entry) => entry.type === "compaction") as
+			| CompactionEntry
+			| undefined;
+		expect(compaction?.summary).toBe("captured summary");
+		expect(compaction?.details).toMatchObject({
+			reflection: "captured reflection",
+			readFiles: [],
+		});
+	});
+
+	it("retries until the compact tool is called", async () => {
+		const harness = await buildHarnessWithHistory();
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage("not compact"),
+			fauxAssistantMessage("still not compact"),
+			fauxAssistantMessage(
+				fauxToolCall("compact", { summary: "third attempt", reflection: "retry worked", files: [] }),
+				{ stopReason: "toolUse" },
+			),
+		]);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		await expect(internals._runAutoCompaction("threshold", false)).resolves.toBe(false);
+		expect(harness.faux.state.callCount).toBe(5);
+		const compaction = harness.sessionManager.getEntries().find((entry) => entry.type === "compaction") as
+			| CompactionEntry
+			| undefined;
+		expect(compaction?.summary).toBe("third attempt");
+	});
+
+	it("emits compaction_end for every compaction_start (success path)", async () => {
+		const harness = await buildHarnessWithHistory(1, [
+			(pi) => {
+				pi.on("session_before_compact", async (event) => ({
+					compaction: {
+						summary: "success summary",
+						firstKeptEntryId: event.preparation.firstKeptEntryId,
+						tokensBefore: event.preparation.tokensBefore,
+						details: {},
+					},
+				}));
+			},
+		]);
+		harnesses.push(harness);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		const startsBefore = harness.eventsOfType("compaction_start").length;
+		const endsBefore = harness.eventsOfType("compaction_end").length;
+
+		await internals._runAutoCompaction("threshold", false);
+
+		const starts = harness.eventsOfType("compaction_start");
+		const ends = harness.eventsOfType("compaction_end");
+		expect(starts.length).toBe(startsBefore + 1);
+		expect(ends.length).toBe(endsBefore + 1);
+		expect(starts.at(-1)).toMatchObject({ type: "compaction_start", reason: "threshold" });
+		expect(ends.at(-1)).toMatchObject({ type: "compaction_end", reason: "threshold", aborted: false });
+		// Controller must be cleared so a subsequent compaction can run.
+		expect(internals._compactionAbortController).toBeUndefined();
+	});
+
+	it("emits compaction_end on summarization failure (extractive fallback)", async () => {
+		const harness = await buildHarnessWithHistory();
+		harnesses.push(harness);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		// Force the summarization LLM call to reject so the catch/fallback path runs.
+		(harness.session.agent as { streamFn: StreamFn }).streamFn = () => {
+			throw new Error("summarization provider hang");
+		};
+
+		const startsBefore = harness.eventsOfType("compaction_start").length;
+		await expect(internals._runAutoCompaction("overflow", true)).resolves.toBe(false);
+
+		const starts = harness.eventsOfType("compaction_start");
+		const ends = harness.eventsOfType("compaction_end");
+		expect(starts.length).toBe(startsBefore + 1);
+		expect(ends.length).toBe(startsBefore + 1);
+		expect(ends.at(-1)).toMatchObject({ type: "compaction_end" });
+		expect(internals._compactionAbortController).toBeUndefined();
+	});
+
+	it("degrades to extractive tail-keep fallback when in-flight compaction is aborted", async () => {
+		const harness = await buildHarnessWithHistory();
+		harnesses.push(harness);
+		const internals = harness.session as unknown as SessionWithCompactionInternals;
+
+		// A summarization stream that never resolves on its own but honors the
+		// abort signal (as the real provider stream would). This simulates a
+		// provider call hung until the per-compaction timeout fires.
+		(harness.session.agent as { streamFn: StreamFn }).streamFn = ((_model, _ctx, options) =>
+			new Promise<never>((_resolve, reject) => {
+				options?.signal?.addEventListener("abort", () => reject(new Error("aborted by timeout")));
+			})) as StreamFn;
+
+		const startsBefore = harness.eventsOfType("compaction_start").length;
+		const compactPromise = internals._runAutoCompaction("threshold", false);
+		// Mimic the 60s COMPACTION_TIMEOUT_MS abort firing immediately.
+		setTimeout(() => harness.session.abortCompaction(), 0);
+		await compactPromise;
+
+		const starts = harness.eventsOfType("compaction_start");
+		const ends = harness.eventsOfType("compaction_end");
+		expect(starts.length).toBe(startsBefore + 1);
+		expect(ends.length).toBe(startsBefore + 1);
+		// A terminal event must exist without raising the timeout wall.
+		expect(ends.at(-1)).toMatchObject({ type: "compaction_end" });
+		expect(internals._compactionAbortController).toBeUndefined();
+	});
+
+	it("exposes a configurable per-compaction timeout constant", () => {
+		expect(COMPACTION_TIMEOUT_MS).toBe(60_000);
+	});
 });

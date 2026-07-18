@@ -750,7 +750,8 @@ export interface NavigateTreeResult {
 export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
-	keepRecentTokens: number;
+	keepRecentTokens?: number;
+	keepRatio: number;
 }
 
 export interface CompactionPreparation {

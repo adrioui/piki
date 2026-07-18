@@ -6,7 +6,7 @@ import { type Static, Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { pathExists, resolveToCwd } from "./path-utils.ts";
+import { pathExists, resolveToolPath } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.ts";
@@ -25,6 +25,8 @@ const DEFAULT_LIMIT = 500;
 export interface TreeToolDetails {
 	truncation?: TruncationResult;
 	entryLimitReached?: number;
+	/** Structured mirror of mag's TreeEntry[]; primary model-visible output remains text. */
+	entries?: Array<{ path: string; name: string; type: "file" | "dir"; depth: number }>;
 }
 
 interface TreeEntry {
@@ -32,8 +34,8 @@ interface TreeEntry {
 	path: string;
 	/** Entry name (basename) */
 	name: string;
-	/** "file" or "directory" */
-	type: "file" | "directory";
+	/** "file" or "dir" */
+	type: "file" | "dir";
 	/** Depth from root (root entries are depth 1) */
 	depth: number;
 }
@@ -60,6 +62,8 @@ const defaultTreeOperations: TreeOperations = {
 export interface TreeToolOptions {
 	/** Custom operations for directory traversal. Default: local filesystem */
 	operations?: TreeOperations;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 function formatTreeCall(
@@ -117,6 +121,7 @@ export function createTreeToolDefinition(
 	options?: TreeToolOptions,
 ): ToolDefinition<typeof treeSchema, TreeToolDetails | undefined> {
 	const ops = options?.operations ?? defaultTreeOperations;
+	const scratchpadPath = options?.scratchpadPath ?? "";
 	return {
 		name: "tree",
 		label: "tree",
@@ -151,7 +156,7 @@ export function createTreeToolDefinition(
 
 				(async () => {
 					try {
-						const dirPath = resolveToCwd(path || ".", cwd);
+						const dirPath = resolveToolPath(path || ".", cwd, scratchpadPath);
 						const isRecursive = recursive ?? true;
 						const effectiveMaxDepth = maxDepth ?? (isRecursive ? 10 : 1);
 						const respectGitignore = gitignore ?? true;
@@ -228,7 +233,7 @@ export function createTreeToolDefinition(
 								entries.push({
 									path: relativePath,
 									name: entry,
-									type: isDir ? "directory" : "file",
+									type: isDir ? "dir" : "file",
 									depth: depth + 1,
 								});
 
@@ -249,14 +254,21 @@ export function createTreeToolDefinition(
 						// Format output: indent by depth, add '/' suffix for directories.
 						const results = entries.map((entry) => {
 							const indent = "  ".repeat(entry.depth - 1);
-							const suffix = entry.type === "directory" ? "/" : "";
+							const suffix = entry.type === "dir" ? "/" : "";
 							return `${indent}${entry.path}${suffix}`;
 						});
 
 						const rawOutput = results.join("\n");
 						const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 						let output = truncation.content;
-						const details: TreeToolDetails = {};
+						const details: TreeToolDetails = {
+							entries: entries.map((entry) => ({
+								path: entry.path,
+								name: entry.name,
+								type: entry.type,
+								depth: entry.depth,
+							})),
+						};
 						const notices: string[] = [];
 						if (entryLimitReached) {
 							notices.push(`${DEFAULT_LIMIT} entries limit reached. Use limit=${DEFAULT_LIMIT * 2} for more`);

@@ -1403,7 +1403,7 @@ describe("agentLoop with AgentMessage", () => {
 		const toolSchema = Type.Object({ role: Type.String(), message: Type.Optional(Type.String()) });
 		const executed: Array<{ role: string; message?: string }> = [];
 		const tool: AgentTool<typeof toolSchema, { role: string; message?: string }> = {
-			name: "spawnWorker",
+			name: "spawn_worker",
 			label: "Spawn worker",
 			description: "Spawn worker",
 			parameters: toolSchema,

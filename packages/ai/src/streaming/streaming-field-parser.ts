@@ -85,8 +85,30 @@ export class StreamingFieldParser {
 				return [];
 			}
 
+			// Validate the machine-built partial BEFORE injecting any in-progress
+			// (pending) tokenizer value. Pending values are, by construction,
+			// incomplete tokens and must never be held to the final-type contract
+			// (e.g. a streaming "1.5e" for a number field is not yet a valid
+			// number; only the complete "1.5e3" can be validated). This mirrors
+			// the Effect-based Stack B parser, which marks partial scalars as
+			// state: "incomplete" and validates them only on completion.
 			this._partial = this.machine.buildPartial();
-			// Include pending (incomplete) value from tokenizer in the partial
+			if (this.schema) {
+				const validation = validatePartialAgainstSchema(this._partial, this.schema);
+				if (!validation.valid) {
+					this.tokenizer.restore(tokenizerSnap);
+					this.machine.restore(machineSnap);
+					this.fieldDiffer.restore(differSnap);
+					this._valid = false;
+					this._validationIssue = validation.issue;
+					this._fieldPath = validation.fieldPath;
+					return [];
+				}
+			}
+
+			// Include the pending (incomplete) value from the tokenizer in the
+			// exposed partial for display/diffing only. It is intentionally
+			// excluded from schema validation above.
 			const pendingValue = this.tokenizer.pendingValue;
 			if (pendingValue !== undefined) {
 				const frame = this.machine.peek();
@@ -100,18 +122,6 @@ export class StreamingFieldParser {
 					if (Array.isArray(partial)) {
 						partial.push(pendingValue);
 					}
-				}
-			}
-			if (this.schema) {
-				const validation = validatePartialAgainstSchema(this._partial, this.schema);
-				if (!validation.valid) {
-					this.tokenizer.restore(tokenizerSnap);
-					this.machine.restore(machineSnap);
-					this.fieldDiffer.restore(differSnap);
-					this._valid = false;
-					this._validationIssue = validation.issue;
-					this._fieldPath = validation.fieldPath;
-					return [];
 				}
 			}
 			return this.fieldDiffer.walkAndDiff(this._partial);

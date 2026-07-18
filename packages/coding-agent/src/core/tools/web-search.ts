@@ -13,6 +13,7 @@ import { isBlockedUrlResolved } from "./web-fetch.ts";
 const webSearchSchema = Type.Object({
 	query: Type.String({ description: "Search query" }),
 	maxResults: Type.Optional(Type.Number({ description: "Maximum results to return (default: 10)" })),
+	schema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 });
 
 export type WebSearchInput = Static<typeof webSearchSchema>;
@@ -100,17 +101,24 @@ export function createWebSearchToolDefinition(): ToolDefinition<typeof webSearch
 				if (results.length === 0) {
 					return {
 						content: [{ type: "text", text: "No results found." }],
-						details: { query: params.query, results: [] },
+						details: { query: params.query, results: [], data: undefined },
 					};
 				}
 				const text = results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.snippet}`).join("\n\n");
-				return { content: [{ type: "text", text }], details: { query: params.query, results } };
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
+				// `sources` mirrors mag's `sources: Array<{title, url}>` for programmatic consumers.
+				// `results` (with snippets) is retained as a piki superset.
 				return {
-					content: [{ type: "text", text: `Web search failed: ${msg}` }],
-					details: { error: true, message: msg },
+					content: [{ type: "text", text }],
+					details: {
+						query: params.query,
+						results,
+						sources: results.map((r) => ({ title: r.title, url: r.url })),
+						data: undefined,
+					},
 				};
+			} catch (err) {
+				if (err instanceof Error) throw err;
+				throw new Error(String(err));
 			}
 		},
 	};

@@ -23,24 +23,31 @@ import {
 	type BeforeToolCallResult,
 	type StreamFn,
 } from "@piki/agent-core";
-
-import type { Model } from "@piki/ai";
+import type { CacheRetention, ImageContent, Model, TextContent } from "@piki/ai";
 import {
 	allowUnknownFieldsForStreaming,
+	clampThinkingLevel,
 	composePayloadHooks,
 	createGrammarInjector,
 	createStructuredOutputInjector,
 	formatCorrectiveFeedback,
+	type ModelThinkingLevel,
 	StreamingFieldParser,
 	typeboxToStreamingSchema,
 } from "@piki/ai";
 import type { AssistantMessage } from "@piki/ai/compat";
-import { ROLE_DEFINITIONS } from "@piki/event-core";
+import { KEEP_MESSAGE_RATIO } from "@piki/event-core";
+import { Effect } from "effect";
 import type { TSchema } from "typebox";
+import { EpochInterruptCoordinator } from "./epoch-interrupt-coordinator.ts";
 import { ErrorRepeatGuard } from "./error-repeat-guard.ts";
-import { checkInputForGuardedPaths } from "./permissions/guarded-paths.ts";
+import type { ExtensionRunner } from "./extensions/index.ts";
+import { checkInputForGuardedPaths, MUTATING_TOOLS } from "./permissions/guarded-paths.ts";
 import { evaluatePermission, type PermissionRule } from "./permissions/permission-gate.ts";
 import { getRolePolicyRules } from "./permissions/role-policy.ts";
+import type { SessionMessageEntry } from "./session-manager.ts";
+import { DEFAULT_WORKER_MAX_TURNS } from "./settings-manager.ts";
+import { ThinkingGovernor } from "./thinking-governor.ts";
 import { setForkContext } from "./worker-executor.ts";
 
 export interface WorkerTool {
@@ -70,11 +77,34 @@ export interface WorkerSessionConfig {
 	cwd?: string;
 	scratchpadPath?: string;
 	maxTurns?: number;
+	/** Desired thinking level for the worker; clamped to the model. Defaults to the leader default thinking level. */
+	thinkingLevel?: ModelThinkingLevel;
 	userRules?: PermissionRule[];
 	streamFn?: StreamFn;
 	publishEvent?: (type: string, payload: Record<string, unknown>) => Promise<void> | void;
+	/** Prompt-cache retention forwarded to the worker's stream function. */
+	cacheRetention?: CacheRetention;
 	onFinished: (result: { text: string; forkId: string; agentId: string; stopReason?: string }) => void;
-	onError: (error: { error: string; forkId: string; agentId: string }) => void;
+	onError: (error: { error: string; forkId: string; agentId: string; partialResult?: string }) => void;
+	/** Shared ref to the leader's ExtensionRunner so worker tool calls fire the same extension hooks. */
+	extensionRunnerRef?: { current?: ExtensionRunner };
+	/** Per-tool execution timeout resolver, shared from the leader's SettingsManager. */
+	getToolTimeoutMs?: (toolName: string) => number | undefined;
+	/** Optional live project-context provider; when given, the leading context
+	 * block of the worker's system prompt is refreshed each turn so the worker
+	 * sees current git/file state (mirrors AgentSession._maybeReloadContextFiles). */
+	getProjectContext?: () => string;
+	/** When true, forbid/mass-destructive shell classification and destructive
+	 * built-in rules are allowed (alpha22 --disable-shell-safeguards). */
+	disableShellSafeguards?: boolean;
+	/** When true, role-policy out-of-cwd write rules are skipped (alpha22
+	 * --disable-cwd-safeguards). Worker-only; the leader uses a separate
+	 * guarded-path mechanism. */
+	disableCwdSafeguards?: boolean;
+	/** Capture callback: every materialized fork entry (initial user task step,
+	 * assistant turns, tool results) is handed to this callback stamped with its
+	 * forkId so the executor can build per-fork ATIF subagent trajectories. */
+	onForkEntry?: (entry: SessionMessageEntry) => void;
 }
 
 /** Adapt WorkerTool → AgentTool (WorkerTool is a structural subset). */
@@ -89,8 +119,6 @@ function toAgentTool(tool: WorkerTool): AgentTool {
 	};
 }
 
-/** Mutating tools that need guarded-path checks. */
-const MUTATING_TOOLS = new Set(["edit", "write", "bash", "edit-diff", "restore_snapshot"]);
 const WORKER_MESSAGE_IDS = new WeakMap<object, string>();
 
 function getWorkerMessageId(message: AgentMessage): string {
@@ -108,24 +136,48 @@ export class WorkerSession {
 	private readonly config: WorkerSessionConfig;
 	private readonly agent: Agent;
 	private readonly unsubscribe: () => void;
+	private readonly baseSystemPrompt: string;
+	private readonly initialContext: string;
 	private readonly errorGuard = new ErrorRepeatGuard({ threshold: 3 });
-	private thinkingCharCount = 0;
+	private readonly thinkingGovernor: ThinkingGovernor;
 	private turnCount = 0;
 	private stoppedForMaxTurns = false;
+	/** When true, the worker is in its final report turn and tool calls are blocked. */
+	private forcedSummaryTurn = false;
 	private maxTurnWarningSent = false;
 	private loopActive = false;
 	private finished = false;
 	private killed = false;
 	private readonly maxTurns: number;
 	private readonly streamingParsers = new Map<string, StreamingFieldParser>();
+	private readonly epochCoordinator = new EpochInterruptCoordinator();
+	private epochToken: ReturnType<EpochInterruptCoordinator["captureToken"]> | undefined;
 	private pendingToolValidationFeedback: string | undefined = undefined;
 	private retryAttempt = 0;
 	private readonly maxValidationRetries = 3;
+	/** Last emitted fork entry id, used to chain parentId for worker ATIF entries. */
+	private forkLastId: string | null = null;
 
 	constructor(config: WorkerSessionConfig) {
 		this.config = config;
-		this.maxTurns = config.maxTurns ?? 30;
+		this.maxTurns = config.maxTurns ?? DEFAULT_WORKER_MAX_TURNS;
+		this.baseSystemPrompt = config.systemPrompt;
+		this.initialContext = config.getProjectContext?.() ?? "";
 
+		// Unified overthinking mechanism (mirrors AgentSession/ThinkingGovernor for
+		// the leader). Workers record thinking deltas and, on exceeding the role's
+		// max thought budget, steer corrective feedback and abort the run — same
+		// feedback shape alpha22 uses for every role.
+		this.thinkingGovernor = new ThinkingGovernor({
+			onOverthinking: (info) => {
+				this.agent.steer({
+					role: "user",
+					content: info.feedback,
+					timestamp: Date.now(),
+				} as AgentMessage);
+				this.agent.abort();
+			},
+		});
 		// Convert worker tools to agent tools
 		const agentTools = config.tools.map(toAgentTool);
 
@@ -139,9 +191,11 @@ export class WorkerSession {
 		// Create the Agent with initial state
 		this.agent = new Agent({
 			initialState: {
-				systemPrompt: config.systemPrompt,
+				systemPrompt: this.buildSystemPrompt(),
 				model: config.model,
-				thinkingLevel: config.model.reasoning ? "medium" : "off",
+				thinkingLevel: config.model.reasoning
+					? (clampThinkingLevel(config.model, config.thinkingLevel ?? "off") as ModelThinkingLevel)
+					: "off",
 				tools: agentTools,
 				messages: [
 					{
@@ -153,9 +207,28 @@ export class WorkerSession {
 			},
 			onPayload,
 			streamFn: config.streamFn,
+			cacheRetention: config.cacheRetention,
 			toolExecution: "parallel",
+			toolTimeout: config.getToolTimeoutMs,
 			transformContext: async (messages, signal) => this.compactContext(messages, signal),
+			prepareNextTurn: () => {
+				// Refresh the leading context block of the system prompt so the
+				// worker observes current git/file state each turn (parity with the
+				// leader's per-edit context reload).
+				this.agent.state.systemPrompt = this.buildSystemPrompt();
+				Effect.runSync(this.epochCoordinator.beginTurn());
+				this.epochToken = this.epochCoordinator.captureToken();
+				return undefined;
+			},
 		});
+
+		// Wire the epoch staleness check so an assistant message mid-stream at
+		// kill time is dropped instead of committed (mirrors AgentSession).
+		this.agent.checkEpoch = () => {
+			const token = this.epochToken;
+			if (!token) return true;
+			return this.epochCoordinator.isTokenCurrent(token);
+		};
 
 		// Wire beforeToolCall: permission gate + guarded paths
 		this.agent.beforeToolCall = async (ctx, signal) =>
@@ -167,6 +240,24 @@ export class WorkerSession {
 
 		// Subscribe to agent events and re-publish to fork
 		this.unsubscribe = this.agent.subscribe((event, signal) => this.handleAgentEvent(event, signal));
+
+		// Materialize the fork's initial user/task step for ATIF export (alpha22
+		// fork.steps begin with the task message). Emitted synchronously in the
+		// constructor so it is captured even if the worker never produces a turn.
+		const userEntry: SessionMessageEntry = {
+			type: "message",
+			id: randomUUID(),
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: {
+				role: "user",
+				content: this.config.initialMessage,
+				timestamp: Date.now(),
+			},
+			forkId: this.config.forkId,
+		};
+		this.forkLastId = userEntry.id;
+		this.config.onForkEntry?.(userEntry);
 	}
 
 	deliverMessage(text: string): void {
@@ -182,6 +273,9 @@ export class WorkerSession {
 
 	kill(): void {
 		this.killed = true;
+		// Mark current epoch interrupted so a streaming turn's partial assistant
+		// message is dropped by the loop's checkEpoch guard.
+		this.epochCoordinator.interrupt("killed");
 		this.agent.abort();
 	}
 
@@ -256,6 +350,7 @@ export class WorkerSession {
 				error: "Worker killed",
 				forkId: this.config.forkId,
 				agentId: this.config.agentId,
+				partialResult: this.lastAssistantText(),
 			});
 			return;
 		}
@@ -265,13 +360,14 @@ export class WorkerSession {
 				error: `Worker LLM error: ${lastAssistant.errorMessage ?? "unknown"}`,
 				forkId: this.config.forkId,
 				agentId: this.config.agentId,
+				partialResult: this.lastAssistantText(),
 			});
 			return;
 		}
 
 		// Success or max_turns
 		this.config.onFinished({
-			text: this.lastAssistantText() ?? "[Worker reached maximum turns without finishing]",
+			text: this.lastAssistantText() ?? this.finishedWithoutTextReport(),
 			forkId: this.config.forkId,
 			agentId: this.config.agentId,
 			stopReason: this.turnCount >= this.maxTurns ? "max_turns" : "finished",
@@ -315,6 +411,18 @@ export class WorkerSession {
 						stopReason: msg.stopReason,
 						destination: { kind: "coordinator" },
 					});
+					// Materialize the assistant turn as a fork entry for ATIF export.
+					const assistantEntry: SessionMessageEntry = {
+						type: "message",
+						id: getWorkerMessageId(event.message),
+						parentId: this.forkLastId,
+						timestamp: new Date().toISOString(),
+						message: msg,
+						forkId: this.config.forkId,
+						...(msg.stopReason === "error" ? { llmFailed: true } : {}),
+					};
+					this.forkLastId = assistantEntry.id;
+					this.config.onForkEntry?.(assistantEntry);
 				} else if (event.message.role === "toolResult") {
 					const tr = event.message as { toolCallId: string; toolName: string; isError: boolean; content: unknown };
 					await this.publishEvent("message_end", {
@@ -330,6 +438,23 @@ export class WorkerSession {
 						result: this.extractToolText(tr.content),
 						status: tr.isError ? "error" : "completed",
 					});
+					// Materialize the tool result as a fork entry for ATIF export.
+					const toolResultEntry: SessionMessageEntry = {
+						type: "message",
+						id: `tr-${tr.toolCallId ?? randomUUID()}`,
+						parentId: this.forkLastId,
+						timestamp: new Date().toISOString(),
+						message: {
+							role: "toolResult",
+							toolCallId: tr.toolCallId,
+							toolName: tr.toolName,
+							content: tr.content as never,
+							isError: tr.isError,
+						} as unknown as AssistantMessage,
+						forkId: this.config.forkId,
+					};
+					this.forkLastId = toolResultEntry.id;
+					this.config.onForkEntry?.(toolResultEntry);
 				}
 				break;
 
@@ -360,6 +485,16 @@ export class WorkerSession {
 				if (this.turnCount >= this.maxTurns) {
 					this.stoppedForMaxTurns = true;
 					this.agent.abort();
+				} else if (this.turnCount === this.maxTurns - 1) {
+					// Final report turn: block further tool calls so the worker
+					// produces its text report instead of starting new exploration.
+					this.forcedSummaryTurn = true;
+					this.agent.steer({
+						role: "user",
+						content:
+							"[System: This is your final report turn. Do not call any more tools. Produce your concise final report now with: outcome, evidence gathered, commands/files checked, verification status, and remaining gaps.]",
+						timestamp: Date.now(),
+					} as AgentMessage);
 				} else if (!this.maxTurnWarningSent && this.turnCount >= this.maxTurns - 3) {
 					this.maxTurnWarningSent = true;
 					this.agent.steer({
@@ -373,6 +508,9 @@ export class WorkerSession {
 
 			case "agent_end":
 				this.streamingParsers.clear();
+				// Reset the overthinking governor between runs/retries so the
+				// role's thought budget is measured per-run, not cumulatively.
+				this.thinkingGovernor.reset(this.config.role);
 				// start() await resolves after this
 				break;
 		}
@@ -410,6 +548,13 @@ export class WorkerSession {
 		};
 		if (update.type === "toolcall_delta" && update.delta) {
 			this.handleToolCallDelta(event, update);
+		}
+		if (update.type === "thinking_delta" && update.delta) {
+			// Feed incremental thinking into the unified overthinking governor
+			// (mirrors the leader's session-orchestrator recordDelta).
+			if (this.thinkingGovernor.recordDelta(this.config.role, update.delta)) {
+				// onOverthinking already steered feedback + aborted the agent.
+			}
 		}
 		if (update.type === "toolcall_end") {
 			const ended = event.assistantMessageEvent as { toolCall?: { id?: string } };
@@ -503,6 +648,15 @@ export class WorkerSession {
 		args: Record<string, unknown>,
 		_signal?: AbortSignal,
 	): Promise<BeforeToolCallResult | undefined> {
+		// During the final report turn, block all tool calls so the worker emits
+		// its text report instead of starting new exploration.
+		if (this.forcedSummaryTurn) {
+			return {
+				block: true,
+				reason: "Final report turn in progress. Tool calls are blocked. Produce your text report now.",
+			};
+		}
+
 		// Set fork context for detached process tracking
 		setForkContext(this.config.forkId);
 
@@ -512,7 +666,13 @@ export class WorkerSession {
 			knownTools: this.config.tools.map((t) => t.name),
 			userRules: this.config.userRules ?? [],
 			roleId: this.config.role,
-			rolePolicyRules: getRolePolicyRules(this.config.role, this.config.cwd, this.config.scratchpadPath),
+			rolePolicyRules: getRolePolicyRules(this.config.role, this.config.cwd, this.config.scratchpadPath, {
+				disableCwdSafeguards: this.config.disableCwdSafeguards,
+				disableShellSafeguards: this.config.disableShellSafeguards,
+			}),
+			disableShellSafeguards: this.config.disableShellSafeguards,
+			cwd: this.config.cwd,
+			scratchpadPath: this.config.scratchpadPath,
 		});
 
 		if (!permissionDecision.permitted) {
@@ -529,6 +689,34 @@ export class WorkerSession {
 				return {
 					block: true,
 					reason: `[Permission Gate] Tool \`${toolName}\` blocked on guarded path \`${guardedPathResult.path}\``,
+				};
+			}
+		}
+
+		// Extension tool_call hooks (mirrors AgentSession.beforeToolCall ordering:
+		// after permission + guarded-path checks). The leader's runner is shared via
+		// the ref, so all loaded extensions fire here too. emitToolCall mutates
+		// args in place via the `modify` action, propagating to execution.
+		const runnerRef = this.config.extensionRunnerRef;
+		const runner = runnerRef?.current;
+		if (runner && (runner.hasHandlers("tool_call") || runner.hasHandlers("before_tool_call"))) {
+			const toolCallResult = await runner.emitToolCall({
+				type: "tool_call",
+				toolName,
+				toolCallId: _toolCallId,
+				input: args,
+			});
+			// Middleware synthesize: return immediate result to bypass execution.
+			if (toolCallResult?.synthesizeResult) {
+				return {
+					immediateResult: toolCallResult.synthesizeResult,
+					immediateResultIsError: toolCallResult.synthesizeIsError ?? false,
+				};
+			}
+			if (toolCallResult?.block) {
+				return {
+					block: true,
+					reason: toolCallResult.reason ?? "blocked by extension",
 				};
 			}
 		}
@@ -550,7 +738,12 @@ export class WorkerSession {
 		}
 
 		const resultText = extractToolResultText(_result);
-		const guardResult = this.errorGuard.recordError(toolCall.name, args as Record<string, unknown>, resultText);
+		const guardResult = this.errorGuard.recordError(
+			toolCall.name,
+			args as Record<string, unknown>,
+			resultText,
+			(_result.details as { toolError?: { category?: string } } | undefined)?.toolError?.category,
+		);
 
 		if (guardResult.shouldStop) {
 			return {
@@ -565,11 +758,52 @@ export class WorkerSession {
 			};
 		}
 
+		// Extension tool_result hooks (mirrors AgentSession.afterToolCall ordering:
+		// after the error-repeat guard). emitToolResult surfaces any extension-modified
+		// content back to the model. Errors are isolated inside the runner, so no
+		// try/catch is needed here.
+		const runner = this.config.extensionRunnerRef?.current;
+		if (runner && (runner.hasHandlers("tool_result") || runner.hasHandlers("after_tool_call"))) {
+			const hook = await runner.emitToolResult({
+				type: "tool_result",
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				input: args as Record<string, unknown>,
+				content: extractToolResultText(_result)
+					? [{ type: "text", text: extractToolResultText(_result) }]
+					: (_result.content as (TextContent | ImageContent)[]),
+				details: _result.details,
+				isError,
+			});
+			if (hook?.content) {
+				return {
+					content: hook.content,
+					details: hook.details,
+					isError: hook.isError ?? isError,
+				};
+			}
+		}
+
 		return undefined;
+	}
+
+	// ─── System prompt (per-turn context refresh) ───
+
+	/** Combine the base role prompt with the current project context block. */
+	private buildSystemPrompt(): string {
+		const context = this.config.getProjectContext?.() ?? this.initialContext;
+		return context ? `${this.baseSystemPrompt}\n\n${context}` : this.baseSystemPrompt;
 	}
 
 	// ─── Thinking governor ───
 
+	/**
+	 * Backstop overthinking check on finalized messages. The primary mechanism is
+	 * incremental `recordDelta` on `thinking_delta` events (wired in
+	 * handleMessageUpdate), which steers feedback + aborts via the governor's
+	 * onOverthinking. Some providers emit thinking only as a single finalized
+	 * block without deltas, so re-run the governor over the message content here.
+	 */
 	private checkThinkingBudget(msg: AssistantMessage): void {
 		let thinkingText = "";
 		for (const content of msg.content) {
@@ -578,19 +812,7 @@ export class WorkerSession {
 			}
 		}
 		if (!thinkingText) return;
-
-		this.thinkingCharCount += thinkingText.length;
-		const roleDef = ROLE_DEFINITIONS[this.config.role];
-		const maxThoughtChars = roleDef?.maxThoughtChars ?? 20000;
-		if (this.thinkingCharCount > maxThoughtChars) {
-			this.agent.steer({
-				role: "user",
-				content:
-					"[System: You have exceeded the thinking budget for this task. Please wrap up your reasoning and proceed to take action or provide your final answer.]",
-				timestamp: Date.now(),
-			} as AgentMessage);
-			this.thinkingCharCount = 0;
-		}
+		this.thinkingGovernor.recordDelta(this.config.role, thinkingText);
 	}
 
 	// ─── Compaction ───
@@ -603,7 +825,8 @@ export class WorkerSession {
 
 		// Keep the initial task (first user message) + recent messages.
 		const initialTask = messages[0];
-		let keepFromIndex = Math.max(1, messages.length - 8);
+		const keepRecent = Math.min(8, Math.max(3, Math.floor(this.config.contextLimit / 16000)));
+		let keepFromIndex = Math.max(1, messages.length - keepRecent);
 		while (keepFromIndex > 0 && messages[keepFromIndex]?.role === "toolResult") {
 			keepFromIndex--;
 		}
@@ -630,9 +853,9 @@ export class WorkerSession {
 		];
 	}
 
-	/** Concatenate truncated per-message texts, capped at ~2000 chars total. */
+	/** Concatenate truncated per-message texts, capped proportionally to the model's context window. */
 	private extractiveSummary(messages: AgentMessage[]): string {
-		const cap = 2000;
+		const cap = Math.max(2000, Math.floor(this.config.contextLimit * KEEP_MESSAGE_RATIO));
 		const parts: string[] = [];
 		let used = 0;
 		for (const msg of messages) {
@@ -667,6 +890,14 @@ export class WorkerSession {
 		const text = this.lastAssistantText();
 		const prefix = `[Worker reached maximum turns (${this.maxTurns}); treating this as a partial report, not a clean completion.]`;
 		return text ? `${prefix}\n\n${text}` : `${prefix}\n\nNo assistant report was produced before the turn limit.`;
+	}
+
+	/** Fallback text emitted when a worker finishes (stopReason "finished") with no
+	 * usable text report — e.g. its final assistant message contained only tool
+	 * calls or thinking blocks. Informative and explicitly not a "maximum turns"
+	 * message, since the worker reached a clean finish. */
+	private finishedWithoutTextReport(): string {
+		return "[Worker finished without a text report. The final assistant message contained only tool calls or non-text content.]";
 	}
 
 	private lastAssistantMessage(): AssistantMessage | undefined {

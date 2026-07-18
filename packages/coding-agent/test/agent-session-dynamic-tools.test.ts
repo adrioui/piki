@@ -182,4 +182,47 @@ describe("AgentSession dynamic tool registration", () => {
 
 		session.dispose();
 	});
+
+	it("registers the leader multi-agent toolkit and fileView, excluding observer-only pass/escalate", async () => {
+		const settingsManager = SettingsManager.create(tempDir, agentDir);
+		const sessionManager = SessionManager.inMemory();
+		const resourceLoader = new DefaultResourceLoader({
+			cwd: tempDir,
+			agentDir,
+			settingsManager,
+		});
+		await resourceLoader.reload();
+
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir,
+			model: getModel("anthropic", "claude-sonnet-4-5")!,
+			settingsManager,
+			sessionManager,
+			resourceLoader,
+		});
+
+		const allToolNames = session.getAllTools().map((tool) => tool.name);
+		// Magnitude alpha22's leader toolkit (workerBase + task + advisor + goal)
+		// includes fileView but NOT the observer-only pass/escalate tools, which
+		// live in the separate observerToolkit.
+		expect(allToolNames).toContain("view");
+		expect(allToolNames).not.toContain("pass");
+		expect(allToolNames).not.toContain("escalate");
+		// Core multi-agent role-control tools are registered by default for the leader.
+		for (const name of [
+			"spawn_worker",
+			"kill_worker",
+			"message_worker",
+			"reassign_worker",
+			"create_task",
+			"update_task",
+			"finish_goal",
+			"message_advisor",
+		]) {
+			expect(allToolNames).toContain(name);
+		}
+
+		session.dispose();
+	});
 });

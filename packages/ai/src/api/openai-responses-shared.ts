@@ -439,8 +439,13 @@ export async function processResponsesStream<TApi extends Api>(
 				: (response?.service_tier ?? options.serviceTier);
 			options.applyServiceTierPricing(output.usage, serviceTier);
 		}
-		// Map status to stop reason
-		output.stopReason = mapStopReason(response?.status);
+		// Map status to stop reason. An OpenAI Responses stream finalized as
+		// incomplete due to content filtering must keep the contentFiltered tag
+		// rather than collapsing to "length".
+		output.stopReason =
+			response?.incomplete_details?.reason === "content_filter"
+				? "contentFiltered"
+				: mapStopReason(response?.status);
 		if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 			output.stopReason = "toolUse";
 		}
@@ -591,7 +596,7 @@ export async function processResponsesStream<TApi extends Api>(
 	}
 }
 
-function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
+export function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {
 	if (!status) return "stop";
 	switch (status) {
 		case "completed":
@@ -606,8 +611,10 @@ function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): Sto
 		case "queued":
 			return "stop";
 		default: {
-			const _exhaustive: never = status;
-			throw new Error(`Unhandled stop reason: ${_exhaustive}`);
+			// Unknown status values are mapped to a graceful "stop" rather than
+			// throwing, matching mag's behavior of completing the turn as a
+			// terminal outcome for reasons it does not recognize.
+			return "stop";
 		}
 	}
 }

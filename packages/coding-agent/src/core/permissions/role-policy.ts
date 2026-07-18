@@ -33,40 +33,41 @@ function escapeRegex(s: string): string {
  *   rejected (the directory itself is still allowed).
  * @param scratchpadPath - Scratchpad directory. Writes here are allowed.
  */
-export function getRolePolicyRules(_roleId?: string, cwd?: string, scratchpadPath?: string): PermissionRule[] {
+export interface RolePolicyOptions {
+	disableCwdSafeguards?: boolean;
+	disableShellSafeguards?: boolean;
+}
+
+export function getRolePolicyRules(
+	_roleId?: string,
+	_cwd?: string,
+	_scratchpadPath?: string,
+	opts?: RolePolicyOptions,
+): PermissionRule[] {
 	const home = homedir();
 	const rules: PermissionRule[] = [];
 
-	// 1. Deny writes outside allowed directories (cwd, scratchpad, ~/.piki)
-	if (cwd || scratchpadPath) {
-		const allowedRoots = [cwd, scratchpadPath, `${home}/.piki`].filter((root): root is string => Boolean(root));
-		const escaped = allowedRoots.map(escapeRegex);
-		const outsideAllowedRoots = `/^(?!(?:${escaped.join("|")})(?:\\/|$)).+/`;
-
-		for (const tool of ["write", "edit", "edit-diff"]) {
-			rules.push({
-				tool,
-				action: "reject",
-				matches: { path: outsideAllowedRoots },
-				message: `${tool} outside allowed directories blocked by role policy`,
-			});
-		}
-	}
+	// 1. Deny writes outside allowed directories (cwd, scratchpad, ~/.piki).
+	// The write/edit/edit-diff boundary is enforced dynamically inside
+	// `evaluatePermission` (it must resolve `../`/`./` and `$M` against cwd,
+	// which a static `matches.path` regex cannot do). See permission-gate.ts.
 
 	// 2. Deny mass-destructive rm targeting ~/.piki
-	const escapedHome = escapeRegex(home);
-	rules.push({
-		tool: "bash",
-		action: "reject",
-		matches: { command: `/rm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+${escapedHome}\\.piki/` },
-		message: "Mass-destructive rm in ~/.piki blocked by role policy",
-	});
-	rules.push({
-		tool: "bash",
-		action: "reject",
-		matches: { command: `/rm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+${escapedHome}\\.piki/` },
-		message: "Mass-destructive rm in ~/.piki blocked by role policy",
-	});
+	if (!opts?.disableShellSafeguards) {
+		const escapedHome = escapeRegex(home);
+		rules.push({
+			tool: "/^(bash|shell)$/",
+			action: "reject",
+			matches: { command: `/rm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+${escapedHome}\\.piki/` },
+			message: "Mass-destructive rm in ~/.piki blocked by role policy",
+		});
+		rules.push({
+			tool: "/^(bash|shell)$/",
+			action: "reject",
+			matches: { command: `/rm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+${escapedHome}\\.piki/` },
+			message: "Mass-destructive rm in ~/.piki blocked by role policy",
+		});
+	}
 
 	return rules;
 }

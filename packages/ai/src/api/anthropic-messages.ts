@@ -1306,8 +1306,16 @@ function mapStopReason(
 			return { stopReason: "stop" }; // We don't supply stop sequences, so this should never happen
 		case "sensitive": // Content flagged by safety filters (not yet in SDK types)
 			return { stopReason: "error" };
+		// mag surfaces `content_filter` as a graceful (non-error) terminal outcome
+		// (ContentFiltered). piki has a dedicated "contentFiltered" StopReason
+		// variant, so map content_filter directly to it (preserving the raw
+		// finish_reason through to the outcome rather than collapsing to "stop").
+		case "content_filter":
+			return { stopReason: "contentFiltered" };
 		default:
-			// Handle unknown stop reasons gracefully (API may add new values)
-			throw new Error(`Unhandled stop reason: ${reason}`);
+			// Unknown stop reasons are mapped to a graceful "stop" rather than
+			// throwing, matching mag's behavior of completing the turn as a
+			// terminal outcome for reasons it does not recognize.
+			return { stopReason: "stop" };
 	}
 }

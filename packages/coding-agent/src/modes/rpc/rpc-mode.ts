@@ -363,7 +363,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
@@ -371,7 +371,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		for (const signal of signals) {
 			const handler = () => {
 				killTrackedDetachedChildren();
-				void shutdown(signal === "SIGHUP" ? 129 : 143, signal);
+				void shutdown(signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143, signal);
 			};
 			process.on(signal, handler);
 			signalCleanupHandlers.push(() => process.off(signal, handler));
@@ -380,6 +380,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	await rebindSession();
 	registerSignalHandlers();
+
+	const onUnhandledRejection = (reason: unknown): void => {
+		console.error(
+			`Unhandled rejection in RPC mode: ${
+				reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+			}`,
+		);
+		void shutdown(1, "SIGINT");
+	};
+	process.on("unhandledRejection", onUnhandledRejection);
+	signalCleanupHandlers.push(() => process.off("unhandledRejection", onUnhandledRejection));
+
+	// G1 (piki↔mag alpha22 parity, LOW): mag also registers a `beforeExit`
+	// handler to run tracked-child cleanup on idle drain. Additive.
+	const onBeforeExit = (): void => {
+		killTrackedDetachedChildren();
+	};
+	process.on("beforeExit", onBeforeExit);
+	signalCleanupHandlers.push(() => process.off("beforeExit", onBeforeExit));
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {

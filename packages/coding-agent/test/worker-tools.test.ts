@@ -23,7 +23,7 @@ function tool(name: string, overrides?: Partial<WorkerTool>): WorkerTool {
 const ALL_TOOLS: WorkerTool[] = [
 	// workerBase
 	tool("read"),
-	tool("bash"),
+	tool("shell"),
 	tool("edit"),
 	tool("write"),
 	tool("grep"),
@@ -35,19 +35,23 @@ const ALL_TOOLS: WorkerTool[] = [
 	tool("compact"),
 	tool("scratchpad_save"),
 	tool("scratchpad_load"),
-	// criticBase subset (already in workerBase except bash/read/grep/find/ls)
+	tool("view"),
+	tool("tree"),
+	tool("query_image"),
+	// criticBase subset (already in workerBase except shell/read/grep/find/ls)
 	// leader-only
-	tool("spawnWorker"),
-	tool("killWorker"),
-	tool("messageWorker"),
-	tool("reassignWorker"),
-	tool("createTask"),
-	tool("updateTask"),
-	tool("messageAdvisor"),
-	tool("finishGoal"),
+	tool("spawn_worker"),
+	tool("kill_worker"),
+	tool("message_worker"),
+	tool("reassign_worker"),
+	tool("create_task"),
+	tool("update_task"),
+	tool("message_advisor"),
+	tool("finish_goal"),
 	tool("pass"),
 	tool("escalate"),
 	tool("checkpoint_changes"),
+	tool("checkpoint_rollback"),
 	tool("restore_snapshot"),
 ];
 
@@ -63,8 +67,8 @@ describe("filterToolsForRole", () => {
 		it("does not include filesystem tools", () => {
 			const result = filterToolsForRole("observer", ALL_TOOLS);
 			const resultNames = names(result);
-			expect(resultNames).not.toContain("read");
 			expect(resultNames).not.toContain("bash");
+			expect(resultNames).not.toContain("read");
 			expect(resultNames).not.toContain("edit");
 			expect(resultNames).not.toContain("write");
 		});
@@ -72,9 +76,9 @@ describe("filterToolsForRole", () => {
 		it("does not include worker-management tools", () => {
 			const result = filterToolsForRole("observer", ALL_TOOLS);
 			const resultNames = names(result);
-			expect(resultNames).not.toContain("spawnWorker");
-			expect(resultNames).not.toContain("killWorker");
-			expect(resultNames).not.toContain("messageWorker");
+			expect(resultNames).not.toContain("spawn_worker");
+			expect(resultNames).not.toContain("kill_worker");
+			expect(resultNames).not.toContain("message_worker");
 		});
 
 		it("does not include web tools", () => {
@@ -88,14 +92,18 @@ describe("filterToolsForRole", () => {
 	describe("critic role (criticBase)", () => {
 		it("returns read-only tools", () => {
 			const result = filterToolsForRole("critic", ALL_TOOLS);
-			expect(names(result)).toEqual(["bash", "find", "grep", "ls", "read"]);
-		});
-
-		it("does not include write/edit", () => {
-			const result = filterToolsForRole("critic", ALL_TOOLS);
-			const resultNames = names(result);
-			expect(resultNames).not.toContain("edit");
-			expect(resultNames).not.toContain("write");
+			expect(names(result)).toEqual([
+				"compact",
+				"edit",
+				"find",
+				"grep",
+				"ls",
+				"read",
+				"shell",
+				"tree",
+				"view",
+				"write",
+			]);
 		});
 
 		it("does not include leader-only tools", () => {
@@ -103,24 +111,30 @@ describe("filterToolsForRole", () => {
 			const resultNames = names(result);
 			expect(resultNames).not.toContain("pass");
 			expect(resultNames).not.toContain("escalate");
-			expect(resultNames).not.toContain("spawnWorker");
+			expect(resultNames).not.toContain("spawn_worker");
 		});
 	});
 
-	describe("engineer role (workerBase, no web)", () => {
-		it("returns workerBase tools minus web tools", () => {
+	describe("engineer role (workerBase)", () => {
+		it("returns workerBase tools", () => {
 			const result = filterToolsForRole("engineer", ALL_TOOLS);
 			expect(names(result)).toEqual([
-				"bash",
+				"checkpoint_changes",
+				"checkpoint_rollback",
 				"compact",
 				"edit",
 				"find",
 				"grep",
 				"ls",
+				"query_image",
 				"read",
 				"scratchpad_load",
 				"scratchpad_save",
+				"shell",
 				"skill",
+				"view",
+				"web_fetch",
+				"web_search",
 				"write",
 			]);
 		});
@@ -130,8 +144,8 @@ describe("filterToolsForRole", () => {
 			const resultNames = names(result);
 			expect(resultNames).not.toContain("pass");
 			expect(resultNames).not.toContain("escalate");
-			expect(resultNames).not.toContain("spawnWorker");
-			expect(resultNames).not.toContain("finishGoal");
+			expect(resultNames).not.toContain("spawn_worker");
+			expect(resultNames).not.toContain("finish_goal");
 		});
 	});
 
@@ -148,7 +162,7 @@ describe("filterToolsForRole", () => {
 			const resultNames = names(result);
 			expect(resultNames).not.toContain("pass");
 			expect(resultNames).not.toContain("escalate");
-			expect(resultNames).not.toContain("spawnWorker");
+			expect(resultNames).not.toContain("spawn_worker");
 		});
 	});
 
@@ -159,29 +173,55 @@ describe("filterToolsForRole", () => {
 		});
 	});
 
+	describe("compact role (compactToolkit)", () => {
+		it("returns no tools", () => {
+			const result = filterToolsForRole("compact", ALL_TOOLS);
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe("advisor role (compactToolkit, mag parity F-ADV-1)", () => {
+		it("returns no tools (matches mag advisor = compactToolkit = empty)", () => {
+			const result = filterToolsForRole("advisor", ALL_TOOLS);
+			expect(result).toEqual([]);
+		});
+
+		it("excludes filesystem and web tools", () => {
+			const result = filterToolsForRole("advisor", ALL_TOOLS);
+			const resultNames = names(result);
+			expect(resultNames).not.toContain("read");
+			expect(resultNames).not.toContain("edit");
+			expect(resultNames).not.toContain("write");
+			expect(resultNames).not.toContain("shell");
+			expect(resultNames).not.toContain("web_search");
+			expect(resultNames).not.toContain("web_fetch");
+			expect(resultNames).not.toContain("query_image");
+		});
+	});
+
 	describe("hidden and internal tools", () => {
 		it("excludes hidden tools by default", () => {
-			const tools = [tool("read"), tool("bash", { hidden: true })];
+			const tools = [tool("read"), tool("shell", { hidden: true })];
 			const result = filterToolsForRole("engineer", tools);
 			expect(names(result)).toEqual(["read"]);
 		});
 
 		it("includes hidden tools when includeHidden is true", () => {
-			const tools = [tool("read"), tool("bash", { hidden: true })];
+			const tools = [tool("read"), tool("shell", { hidden: true })];
 			const result = filterToolsForRole("engineer", tools, { includeHidden: true });
-			expect(names(result)).toEqual(["bash", "read"]);
+			expect(names(result)).toEqual(["read", "shell"]);
 		});
 
 		it("excludes internal tools by default", () => {
-			const tools = [tool("read"), tool("bash", { internal: true })];
+			const tools = [tool("read"), tool("shell", { internal: true })];
 			const result = filterToolsForRole("engineer", tools);
 			expect(names(result)).toEqual(["read"]);
 		});
 
 		it("includes internal tools when includeInternal is true", () => {
-			const tools = [tool("read"), tool("bash", { internal: true })];
+			const tools = [tool("read"), tool("shell", { internal: true })];
 			const result = filterToolsForRole("engineer", tools, { includeInternal: true });
-			expect(names(result)).toEqual(["bash", "read"]);
+			expect(names(result)).toEqual(["read", "shell"]);
 		});
 	});
 });

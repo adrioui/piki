@@ -1,5 +1,5 @@
 import { createRoleControlTool } from "./role-control-tool.ts";
 
 export function createMessageAdvisorToolDefinition() {
-	return createRoleControlTool("messageAdvisor", "Ask the advisor for guidance.");
+	return createRoleControlTool("message_advisor", "Ask the advisor for guidance.");
 }

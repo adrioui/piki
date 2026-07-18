@@ -24,16 +24,16 @@ describe("getRolePolicyRules", () => {
 		expect(rules.some((rule) => rule.tool === "*" && rule.action === "allow")).toBe(false);
 	});
 
-	it("includes deny rules for write/edit/edit-diff outside allowed dirs", () => {
+	it("does not generate static write/edit/edit-diff deny rules (enforced dynamically in the gate)", () => {
 		const cwd = "/var/home/user/project";
 		const rules = getRolePolicyRules(undefined, cwd);
 		const denyWrite = rules.filter((r) => r.action === "reject" && ["write", "edit", "edit-diff"].includes(r.tool));
-		expect(denyWrite.length).toBeGreaterThanOrEqual(3);
+		expect(denyWrite.length).toBe(0);
 	});
 
 	it("includes deny rules for mass-destructive rm targeting ~/.piki", () => {
 		const rules = getRolePolicyRules();
-		const bashDenyRules = rules.filter((r) => r.tool === "bash" && r.action === "reject");
+		const bashDenyRules = rules.filter((r) => r.tool === "/^(bash|shell)$/" && r.action === "reject");
 		expect(bashDenyRules.length).toBeGreaterThanOrEqual(2);
 	});
 
@@ -44,15 +44,57 @@ describe("getRolePolicyRules", () => {
 		expect(writeDeny.length).toBe(0);
 	});
 
-	it("includes write deny rules when cwd is provided", () => {
+	it("does not generate static write deny rules when cwd is provided (enforced dynamically in the gate)", () => {
 		const rules = getRolePolicyRules("worker", "/tmp/project");
 		const writeDeny = rules.filter((r) => r.tool === "write" && r.action === "reject");
-		expect(writeDeny.length).toBeGreaterThan(0);
+		expect(writeDeny.length).toBe(0);
 	});
 
-	it("accepts optional scratchpadPath parameter", () => {
+	it("accepts optional scratchpadPath parameter without generating static write rules", () => {
 		const rules = getRolePolicyRules("worker", "/tmp/project", "/tmp/scratchpad");
 		expect(rules.length).toBeGreaterThan(0);
-		expect(rules.some((rule) => rule.matches?.path?.includes("scratchpad"))).toBe(true);
+		// Write boundaries are enforced dynamically in the gate, not via static
+		// scratchpad-path matches, so no static write rule references it.
+		expect(rules.some((rule) => rule.tool === "write" && rule.matches?.path?.includes("scratchpad"))).toBe(false);
+	});
+
+	describe("disableCwdSafeguards", () => {
+		it("skips out-of-cwd write rules when set", () => {
+			const rules = getRolePolicyRules("worker", "/tmp/project", undefined, {
+				disableCwdSafeguards: true,
+			});
+			const writeDeny = rules.filter(
+				(r) => r.action === "reject" && ["write", "edit", "edit-diff"].includes(r.tool),
+			);
+			expect(writeDeny.length).toBe(0);
+		});
+
+		it("does not include static out-of-cwd write rules (enforced dynamically in the gate)", () => {
+			const rules = getRolePolicyRules("worker", "/tmp/project", undefined);
+			const writeDeny = rules.filter(
+				(r) => r.action === "reject" && ["write", "edit", "edit-diff"].includes(r.tool),
+			);
+			expect(writeDeny.length).toBe(0);
+		});
+	});
+
+	describe("disableShellSafeguards", () => {
+		it("skips ~/.piki mass-destructive rm rules when set", () => {
+			const rules = getRolePolicyRules("worker", "/tmp/project", undefined, {
+				disableShellSafeguards: true,
+			});
+			const pikiDeny = rules.filter(
+				(r) => r.tool === "/^(bash|shell)$/" && r.action === "reject" && r.matches?.command?.includes(".piki"),
+			);
+			expect(pikiDeny.length).toBe(0);
+		});
+
+		it("includes ~/.piki mass-destructive rm rules by default", () => {
+			const rules = getRolePolicyRules("worker", "/tmp/project", undefined);
+			const pikiDeny = rules.filter(
+				(r) => r.tool === "/^(bash|shell)$/" && r.action === "reject" && r.matches?.command?.includes(".piki"),
+			);
+			expect(pikiDeny.length).toBeGreaterThanOrEqual(2);
+		});
 	});
 });

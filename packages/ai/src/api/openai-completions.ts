@@ -451,7 +451,16 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				throw new Error(output.errorMessage || "Provider returned an error stop reason");
 			}
 			if (!hasFinishReason) {
-				throw new Error("Stream ended without finish_reason");
+				// Magnitude's completions parser tolerates streams that end without an
+				// explicit terminal finish_reason when the stream already produced usable
+				// content or tool calls. Only treat a fully-empty result as a failure.
+				const hasUsableOutput = blocks.some(
+					(b) => (b.type === "text" && b.text.length > 0) || b.type === "toolCall",
+				);
+				if (!hasUsableOutput) {
+					throw new Error("Stream ended without finish_reason");
+				}
+				output.stopReason = "stop";
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -1167,14 +1176,14 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 		case "tool_calls":
 			return { stopReason: "toolUse" };
 		case "content_filter":
-			return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
+			return { stopReason: "contentFiltered" };
 		case "network_error":
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
 		default:
-			return {
-				stopReason: "error",
-				errorMessage: `Provider finish_reason: ${reason}`,
-			};
+			// Unknown finish_reasons are mapped to a graceful "stop" rather than
+			// erroring, matching mag's behavior of completing the turn as a
+			// terminal outcome for reasons it does not recognize.
+			return { stopReason: "stop" };
 	}
 }
 

@@ -56,8 +56,6 @@ export type {
 	OAuthSelectPrompt,
 } from "./utils/oauth/types.ts";
 export * from "./utils/overflow.ts";
-export * from "./utils/retry.ts";
-export * from "./utils/retry-backoff.ts";
 export * from "./utils/token-estimate.ts";
 export * from "./utils/typebox-helpers.ts";
 export * from "./utils/validation.ts";

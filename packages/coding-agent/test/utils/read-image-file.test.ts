@@ -139,9 +139,14 @@ describe("readImageFileForModel", () => {
 		await expect(readImageFileForModel(path)).rejects.toThrow(/Unsupported or unknown image format/);
 	});
 
-	it("allowSvgPassthrough:false → SVG falls through to mime detect → throw", async () => {
+	it("allowSvgPassthrough:false → SVG detected as image/svg+xml via mime sniff", async () => {
 		const path = join(dir, "icon.svg");
 		await writeFile(path, SVG_BYTES);
-		await expect(readImageFileForModel(path, { allowSvgPassthrough: false })).rejects.toThrow();
+		const out = await readImageFileForModel(path, { allowSvgPassthrough: false });
+		expect(out.mediaType).toBe("image/svg+xml");
+		expect(out.width).toBe(0);
+		expect(out.height).toBe(0);
+		const decoded = Buffer.from(out.base64, "base64").toString("utf-8");
+		expect(decoded).toContain("<svg");
 	});
 });

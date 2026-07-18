@@ -39,8 +39,8 @@ export function migrateAuthToAuthJson(): string[] {
 				providers.push(provider);
 			}
 			renameSync(oauthPath, `${oauthPath}.migrated`);
-		} catch {
-			// Skip on error
+		} catch (err) {
+			console.log(chalk.yellow(`Warning: Skipping corrupt oauth.json: ${err instanceof Error ? err.message : err}`));
 		}
 	}
 
@@ -59,8 +59,12 @@ export function migrateAuthToAuthJson(): string[] {
 				delete settings.apiKeys;
 				writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
 			}
-		} catch {
-			// Skip on error
+		} catch (err) {
+			console.log(
+				chalk.yellow(
+					`Warning: Skipping corrupt settings.json apiKeys: ${err instanceof Error ? err.message : err}`,
+				),
+			);
 		}
 	}
 
@@ -124,8 +128,12 @@ export function migrateSessionsFromAgentRoot(): void {
 			if (existsSync(newPath)) continue; // Skip if target exists
 
 			renameSync(file, newPath);
-		} catch {
-			// Skip files that can't be migrated
+		} catch (err) {
+			console.log(
+				chalk.yellow(
+					`Warning: Skipping un-migratable session file ${file}: ${err instanceof Error ? err.message : err}`,
+				),
+			);
 		}
 	}
 }
@@ -166,8 +174,10 @@ function migrateKeybindingsConfigFile(): void {
 		const { config, migrated } = migrateKeybindingsConfig(parsed as Record<string, unknown>);
 		if (!migrated) return;
 		writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
-	} catch {
-		// Ignore malformed files during migration
+	} catch (err) {
+		console.log(
+			chalk.yellow(`Warning: Skipping malformed keybindings.json: ${err instanceof Error ? err.message : err}`),
+		);
 	}
 }
 

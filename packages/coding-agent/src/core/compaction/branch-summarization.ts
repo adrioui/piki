@@ -8,6 +8,7 @@
 import type { AgentMessage, StreamFn } from "@piki/agent-core";
 import type { Model, SimpleStreamOptions } from "@piki/ai/compat";
 import { completeSimple } from "@piki/ai/compat";
+import { OUTPUT_TOKEN_RESERVE } from "@piki/event-core";
 import {
 	convertToLlm,
 	createBranchSummaryMessage,
@@ -300,7 +301,7 @@ export async function generateBranchSummary(
 		signal,
 		customInstructions,
 		replaceInstructions,
-		reserveTokens = 16384,
+		reserveTokens = OUTPUT_TOKEN_RESERVE,
 		streamFn,
 	} = options;
 

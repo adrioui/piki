@@ -1,4 +1,5 @@
-import type { Model } from "@piki/ai";
+import type { KnownProvider, Model } from "@piki/ai";
+import { getModels, getProviders } from "@piki/ai/compat";
 import { describe, expect, test, vi } from "vitest";
 import {
 	defaultModelPerProvider,
@@ -686,5 +687,28 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("spark-two");
 		expect(result.model?.id).toBe("deepseek-v4-flash");
+	});
+
+	test("every defaultModelPerProvider entry resolves against the runtime catalog", () => {
+		const catalogIds = new Set(
+			getProviders().flatMap((provider) =>
+				getModels(provider as KnownProvider).map((model) => `${model.provider}/${model.id}`),
+			),
+		);
+		const provisionedProviders = new Set(getProviders());
+		const failures: string[] = [];
+		for (const [provider, modelId] of Object.entries(defaultModelPerProvider)) {
+			const catalogMatch = `${provider}/${modelId}`;
+			const exact = catalogIds.has(catalogMatch);
+			// The runtime resolver matches by provider + id; a slug like "openrouter/foo"
+			// must resolve as a real model under that provider in the generated catalog.
+			const providerHasModel = getModels(provider as KnownProvider).some((model) => model.id === modelId);
+			if (!exact && !providerHasModel) {
+				failures.push(
+					`${provider}: "${modelId}" not found in runtime catalog (provisioned provider: ${provisionedProviders.has(provider as KnownProvider)})`,
+				);
+			}
+		}
+		expect(failures, failures.join("\n")).toEqual([]);
 	});
 });

@@ -10,7 +10,6 @@ import {
 	type Focusable,
 	getKeybindings,
 	Input,
-	matchesKey,
 	Spacer,
 	truncateToWidth,
 	visibleWidth,
@@ -488,7 +487,7 @@ class ResourceList implements Component, Focusable {
 			this.onCancel?.();
 			return;
 		}
-		if (matchesKey(data, "ctrl+c")) {
+		if (kb.matches(data, "app.clear")) {
 			this.onExit?.();
 			return;
 		}

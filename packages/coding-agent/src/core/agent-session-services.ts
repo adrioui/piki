@@ -64,6 +64,12 @@ export interface CreateAgentSessionFromServicesOptions {
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
 	noTools?: CreateAgentSessionOptions["noTools"];
 	customTools?: ToolDefinition[];
+	/** When true, forbid/mass-destructive shell classification and destructive built-in rules are allowed (alpha22 --disable-shell-safeguards). */
+	disableShellSafeguards?: boolean;
+	/** When true, role-policy out-of-cwd write rules are skipped for spawned workers (alpha22 --disable-cwd-safeguards). Leader is unaffected. */
+	disableCwdSafeguards?: boolean;
+	/** Initial goal objective (alpha22 --goal). Seeds the Goal projection at session init. */
+	goal?: string;
 }
 
 /**
@@ -204,6 +210,9 @@ export async function createAgentSessionFromServices(
 		noTools: options.noTools,
 		customTools: options.customTools,
 		sessionStartEvent: options.sessionStartEvent,
+		disableShellSafeguards: options.disableShellSafeguards,
+		disableCwdSafeguards: options.disableCwdSafeguards,
+		goal: options.goal,
 	});
 	await attachSessionOrchestrator(created.session, options.services);
 	return created;

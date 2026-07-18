@@ -1,4 +1,5 @@
 import type { ImageContent, TextContent } from "@piki/ai";
+import { DEFAULT_CONTEXT_WINDOW, proportionalToolOutputBytes } from "./context-budget.ts";
 
 export interface ToolResultForModel {
 	content: (TextContent | ImageContent)[];
@@ -118,7 +119,7 @@ export function validateToolCallResult(
 	}
 
 	// Tool-specific validation
-	if (toolName === "bash") {
+	if (toolName === "bash" || toolName === "shell") {
 		const argsObj = args as Record<string, unknown> | undefined;
 		const command = argsObj?.command;
 		if (!command || (typeof command === "string" && command.trim() === "")) {
@@ -137,9 +138,6 @@ export function validateToolCallResult(
 
 	return { isValid: errors.length === 0, warnings, errors };
 }
-
-/** Maximum size for tool results (100KB). */
-const MAX_TOOL_RESULT_BYTES = 100 * 1024;
 
 /** Truncate content from the tail, keeping the last N bytes. */
 function truncateTail(content: string, maxBytes: number): { text: string; truncated: boolean } {
@@ -165,11 +163,17 @@ export function formatToolResultForModel(
 	args: unknown,
 	result: ToolResultForModel,
 	isError: boolean,
+	contextWindow: number = DEFAULT_CONTEXT_WINDOW,
 ): (TextContent | ImageContent)[] | undefined {
 	if (isError) {
 		return undefined;
 	}
-	const text = result.content
+	const toolResultBytes = proportionalToolOutputBytes(contextWindow);
+	// Untyped extension tools (and hand-built tool results) may omit `content`.
+	// Normalize to an empty array so the null never reaches rendering or the
+	// provider payload (issues #6259, #6276).
+	const content = result.content ?? [];
+	const text = content
 		.filter((content) => content.type === "text")
 		.map((content) => content.text ?? "")
 		.join("\n")
@@ -182,15 +186,15 @@ export function formatToolResultForModel(
 		return undefined;
 	}
 
-	if (toolName === "bash") {
+	if (toolName === "bash" || toolName === "shell") {
 		if (text.startsWith("[bash]")) {
 			return undefined;
 		}
 		const command = getStringArg(args, "command");
 		const header = command ? `[bash] $ ${command}` : "[bash]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}
@@ -201,9 +205,9 @@ export function formatToolResultForModel(
 		}
 		const path = getStringArg(args, "file_path") ?? getStringArg(args, "path");
 		const header = path ? `[edit] ${path}` : "[edit]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}
@@ -214,9 +218,9 @@ export function formatToolResultForModel(
 		}
 		const path = getStringArg(args, "file_path") ?? getStringArg(args, "path");
 		const header = path ? `[write] ${path}` : "[write]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}
@@ -227,9 +231,9 @@ export function formatToolResultForModel(
 		}
 		const query = getStringArg(args, "pattern") ?? getStringArg(args, "query");
 		const header = query ? `[grep] ${query}` : "[grep]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}
@@ -240,9 +244,9 @@ export function formatToolResultForModel(
 		}
 		const pattern = getStringArg(args, "pattern") ?? getStringArg(args, "glob");
 		const header = pattern ? `[find] ${pattern}` : "[find]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}
@@ -253,9 +257,9 @@ export function formatToolResultForModel(
 		}
 		const dir = getStringArg(args, "path") ?? getStringArg(args, "directory");
 		const header = dir ? `[ls] ${dir}` : "[ls]";
-		const { text: truncatedText, truncated } = truncateTail(text, MAX_TOOL_RESULT_BYTES);
+		const { text: truncatedText, truncated } = truncateTail(text, toolResultBytes);
 		const finalText = truncated
-			? `${header}\n... [truncated, showing last ${formatSize(MAX_TOOL_RESULT_BYTES)}]\n${truncatedText}`
+			? `${header}\n... [truncated, showing last ${formatSize(toolResultBytes)}]\n${truncatedText}`
 			: `${header}\n${truncatedText}`;
 		return [{ type: "text", text: finalText }];
 	}

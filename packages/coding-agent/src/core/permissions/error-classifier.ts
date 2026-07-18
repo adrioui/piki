@@ -117,13 +117,13 @@ export function classifyByStatus(status: number | undefined, headers?: Record<st
 		case 408:
 			return {
 				category: "timeout",
-				retryable: true,
+				retryable: false,
 				message: "Request timed out. The server took too long to respond.",
 			};
 		case 409:
 			return {
 				category: "conflict",
-				retryable: true,
+				retryable: false,
 				message: "Request conflict. The operation could not be completed due to a conflicting state.",
 			};
 		case 429: {
@@ -267,6 +267,9 @@ export function classifyError(error: unknown, headers?: Record<string, string>):
 	}
 
 	// Auth
+	// Word-boundary "auth" excludes false positives: "author", "reauthorize",
+	// "authoritative", "authorization". Real auth failures say "authenticat*",
+	// "credentials", or the standalone token "auth".
 	if (
 		lower.includes("unauthorized") ||
 		lower.includes("unauthenticated") ||
@@ -274,7 +277,11 @@ export function classifyError(error: unknown, headers?: Record<string, string>):
 		lower.includes("api_key") ||
 		lower.includes("invalid key") ||
 		lower.includes("invalid authentication") ||
-		lower.includes("auth")
+		/\bauthenticat(e|ed|ion|ing)\b/.test(lower) ||
+		/\bcredentials?\b/.test(lower) ||
+		/\bauth\b/.test(lower) ||
+		/\b401\b/.test(lower) ||
+		/\b403\b/.test(lower)
 	) {
 		return {
 			category: "auth",
@@ -327,6 +334,22 @@ export function classifyError(error: unknown, headers?: Record<string, string>):
 		lower.includes("provider returned error")
 	) {
 		return classifyByStatus(503, headers);
+	}
+
+	// Explicit provider retry guidance: OpenAI Responses and Bedrock stream
+	// exceptions that explicitly tell the caller to retry the request (#6019).
+	// These are transient upstream failures, not quota/auth/client errors.
+	if (
+		lower.includes("you can retry your request") ||
+		lower.includes("try your request again") ||
+		lower.includes("please retry your request")
+	) {
+		return {
+			category: "server_error",
+			retryable: true,
+			message: "Provider requested a retry. Retrying automatically.",
+			retryDelayMs: computeJitteredDelay(0, 5000, 30000),
+		};
 	}
 
 	// Default: unknown, non-retryable

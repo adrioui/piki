@@ -10,17 +10,23 @@
  * Uses concurrencyKey per fork to prevent races.
  */
 
-import type { StreamFn } from "@piki/agent-core";
-import type { Model } from "@piki/ai";
+import type { AgentToolResult, StreamFn, ThinkingLevel } from "@piki/agent-core";
+import type { CacheRetention, Model } from "@piki/ai";
 import {
 	type EventEnvelope,
 	type ForkedProjectionStore,
 	ROLE_DEFINITIONS,
 	type RoleDefinition,
 } from "@piki/event-core";
+import { renderWorkerSystemPrompt } from "@piki/roles";
+import { formatSkillsForPrompt } from "@piki/skills";
 import { Effect } from "effect";
 import { DetachedProcessRegistry } from "./detached-process-registry.ts";
+import { getThinkingLevelForTier } from "./model-tier-config.ts";
+import { createObserverToolkit } from "./observer/toolkit.ts";
 import type { PermissionRule } from "./permissions/permission-gate.ts";
+import type { SessionEntry } from "./session-manager.ts";
+import type { SettingsManager } from "./settings-manager.ts";
 import { buildRoleAwareWorkerContext, buildWorkerContext } from "./worker-context-builder.ts";
 import { WorkerEffectRuntime } from "./worker-effect-runtime.ts";
 import { WorkerLifecycleRegistry } from "./worker-lifecycle-registry.ts";
@@ -39,19 +45,34 @@ export interface WorkerExecutorOptions {
 	 * `No API key for provider: <provider>` for any key-based provider.
 	 */
 	streamFn?: StreamFn;
-	getSystemPrompt: (role: string) => string;
 	getAllTools: () => WorkerTool[];
 	/** Optional: returns all loaded skills for role-based filtering. */
-	getAllSkills?: () => import("./skills.ts").Skill[];
+	getAllSkills?: () => import("@piki/skills").Skill[];
 	getProjectContext: () => string;
 	cwd?: string;
 	scratchpadPath?: string;
 	getTranscript: () => string;
 	getScratchpad?: () => string;
 	getProcessContext?: () => string;
+	/** Per-tool execution timeout resolver shared from the leader's SettingsManager. */
+	getToolTimeoutMs?: (toolName: string) => number | undefined;
+	/** Default thinking level for spawned workers, derived from the leader's SettingsManager. */
+	getDefaultThinkingLevel?: () => ThinkingLevel | undefined;
+	/** Worker maxTurns resolver shared from the leader's SettingsManager. */
+	getWorkerMaxTurns?: () => number;
+	/** Prompt-cache retention applied to all spawned workers. */
+	cacheRetention?: CacheRetention;
 	publishEvent: (type: string, payload: Record<string, unknown>) => Promise<void>;
+	/** Shared SettingsManager so spawned workers inherit declarative permissionRules. */
+	settingsManager?: SettingsManager;
 	userRules?: PermissionRule[];
 	forkedProjectionStore?: ForkedProjectionStore<RuntimeEvent>;
+	/** Shared ref to the leader's ExtensionRunner so spawned workers fire extension tool hooks. */
+	extensionRunnerRef?: { current?: import("./extensions/index.ts").ExtensionRunner };
+	/** When true, forbid/mass-destructive shell classification and destructive rules are allowed. */
+	disableShellSafeguards?: boolean;
+	/** When true, role-policy out-of-cwd write rules are skipped (worker-only). */
+	disableCwdSafeguards?: boolean;
 	onWorkerFinished: (result: {
 		text: string;
 		forkId: string;
@@ -86,6 +107,20 @@ export class WorkerExecutor {
 	private readonly lifecycle = new WorkerLifecycleRegistry();
 	private readonly options: WorkerExecutorOptions;
 	private currentForkId: string | undefined;
+	/** Per-fork captured worker SessionEntry buffers (for ATIF subagent_trajectories). Retained for the whole session; cleared only in dispose(). */
+	private readonly forkEntries = new Map<string, SessionEntry[]>();
+	/** Per-fork real fork metadata captured from the `agent_created` event (for ATIF spawn-step real `agentId`/`role`/`taskId`/`mode`/`message`). */
+	private readonly forkMeta = new Map<
+		string,
+		{
+			agentId: string;
+			parentForkId: string | null;
+			role: string;
+			taskId: string | undefined;
+			mode: string;
+			message: string | undefined;
+		}
+	>();
 
 	/** Register a detached process PID for the current fork. */
 	registerDetachedPid(pid: number, outputPath?: string): void {
@@ -102,6 +137,36 @@ export class WorkerExecutor {
 	/** Get the DetachedProcessRegistry for external use. */
 	getDetachedProcessRegistry(): DetachedProcessRegistry {
 		return this.detachedRegistry;
+	}
+
+	/** Record a worker-session entry into the per-fork buffer. */
+	recordForkEntry(forkId: string, entry: SessionEntry): void {
+		let arr = this.forkEntries.get(forkId);
+		if (!arr) {
+			arr = [];
+			this.forkEntries.set(forkId, arr);
+		}
+		arr.push(entry);
+	}
+
+	/** Read-only view of the captured per-fork worker entries. */
+	getForkEntries(): Map<string, SessionEntry[]> {
+		return this.forkEntries;
+	}
+
+	/** Read-only view of the captured per-fork real fork metadata (agentId/role/taskId/mode/message). */
+	getForkMeta(): Map<
+		string,
+		{
+			agentId: string;
+			parentForkId: string | null;
+			role: string;
+			taskId: string | undefined;
+			mode: string;
+			message: string | undefined;
+		}
+	> {
+		return this.forkMeta;
 	}
 
 	getWorkerLifecycleRegistry(): WorkerLifecycleRegistry {
@@ -146,13 +211,23 @@ export class WorkerExecutor {
 			forkId: string;
 			agentId: string;
 			role: string;
+			parentForkId?: string | null;
 			context?: string;
 			message?: string;
 			mode?: string;
+			taskId?: string;
 		};
 
 		const { forkId, agentId, role } = payload;
 		if (payload.mode !== "spawn" || role === "leader") return;
+		this.forkMeta.set(forkId, {
+			agentId,
+			parentForkId: payload.parentForkId ?? null,
+			role,
+			taskId: payload.taskId,
+			mode: payload.mode ?? "spawn",
+			message: payload.message,
+		});
 		await Effect.runPromise(this.lifecycle.apply({ type: "created", forkId, agentId, role }));
 
 		const model = this.options.resolveModel(role);
@@ -166,9 +241,39 @@ export class WorkerExecutor {
 		let filteredTools: WorkerTool[];
 		let context: string;
 		try {
-			systemPrompt = this.options.getSystemPrompt(role);
-			const allTools = this.options.getAllTools();
-			filteredTools = filterToolsForRole(role, allTools);
+			systemPrompt = renderWorkerSystemPrompt(role, {
+				skills: formatSkillsForPrompt(this.options.getAllSkills?.() ?? [], { role }),
+				cwd: this.options.cwd ?? process.cwd(),
+				// Per-role thinking limit so workers inherit the role's maxThoughtChars
+				// (e.g. scout=2000) instead of the default 20000. Matches mag's
+				// per-role thinking governance injection.
+				thinkingLimit: ROLE_DEFINITIONS[role]?.maxThoughtChars ?? 20000,
+			});
+			if (role === "observer") {
+				// The observer is a tool-calling agent: it decides pass/escalate via
+				// the observerToolkit (pass/escalate tools) instead of an aux-model
+				// JSON boolean call. Each tool returns a verdict that we re-publish
+				// as an `observer_verdict` runtime event so the orchestrator can act
+				// on it (inject pass / trigger advisor consultation).
+				filteredTools = createObserverToolkit().map((tool) => ({
+					name: tool.name,
+					description: tool.description,
+					parameters: tool.parameters,
+					execute: async (id, args): Promise<AgentToolResult<unknown>> => {
+						const result = await tool.execute(id, args);
+						try {
+							const verdict = JSON.parse((result.content[0]?.text ?? "{}") as string) as Record<string, unknown>;
+							await this.options.publishEvent("observer_verdict", { ...verdict, role: "observer" });
+						} catch {
+							// Ignore malformed verdict; the observer will simply not escalate.
+						}
+						return { content: result.content, details: null };
+					},
+				}));
+			} else {
+				const allTools = this.options.getAllTools();
+				filteredTools = filterToolsForRole(role, allTools);
+			}
 
 			// Build role-aware context using the role's context lens
 			const roleDef = ROLE_DEFINITIONS[role];
@@ -198,19 +303,38 @@ export class WorkerExecutor {
 			return;
 		}
 
+		const roleTier = ROLE_DEFINITIONS[role]?.tier;
+		const leaderThinkingLevel = this.options.getDefaultThinkingLevel?.();
+		const thinkingLevel = getThinkingLevelForTier(roleTier, leaderThinkingLevel ?? "off");
+
 		const session = new WorkerSession({
 			forkId,
 			agentId,
 			role,
 			model,
-			systemPrompt: `${systemPrompt}\n\n${context}`,
+			thinkingLevel,
+			systemPrompt,
+			getProjectContext: () => {
+				if (!this.options.getProjectContext) return context;
+				try {
+					return this.options.getProjectContext();
+				} catch {
+					return context;
+				}
+			},
 			initialMessage: payload.message ?? payload.context ?? "",
 			tools: filteredTools,
+			maxTurns: role === "observer" ? 1 : this.options.getWorkerMaxTurns?.(),
 			contextLimit: model.contextWindow ?? 128000,
 			cwd: this.options.cwd,
 			scratchpadPath: this.options.scratchpadPath,
 			streamFn: this.options.streamFn,
-			userRules: this.options.userRules ?? [],
+			cacheRetention: this.options.cacheRetention,
+			userRules: [...(this.options.settingsManager?.getPermissionRules() ?? []), ...(this.options.userRules ?? [])],
+			disableShellSafeguards: this.options.disableShellSafeguards,
+			disableCwdSafeguards: this.options.disableCwdSafeguards,
+			extensionRunnerRef: this.options.extensionRunnerRef,
+			getToolTimeoutMs: this.options.getToolTimeoutMs,
 			publishEvent: (type, eventPayload) =>
 				this.options.publishEvent(type, {
 					...eventPayload,
@@ -230,6 +354,7 @@ export class WorkerExecutor {
 				if (killed) return;
 				this.options.onWorkerError({ ...error, role });
 			},
+			onForkEntry: (entry) => this.recordForkEntry(forkId, entry),
 		});
 
 		this.workers.set(agentId, session);
@@ -239,8 +364,9 @@ export class WorkerExecutor {
 			this.forkWorkers.set(forkId, forkSet);
 		}
 		forkSet.add(agentId);
-		await this.runtime.drainMessages(agentId, (message) => session.deliverMessage(message));
 
+		// Start the worker session FIRST so it can begin consuming its queue and
+		// run turns. `startSession` forks a fiber and returns immediately.
 		this.runtime.startSession(agentId, session, (err) => {
 			const killed = this.isKilled(agentId);
 			void this.finalizeWorker(forkId, agentId, killed ? "killed" : "error");
@@ -253,6 +379,13 @@ export class WorkerExecutor {
 			});
 		});
 		await Effect.runPromise(this.lifecycle.apply({ type: "started", agentId }));
+
+		// Drain any pre-start messages that queued up before the session began.
+		// Fire-and-forget (void): `drainMessages` blocks on Queue.take until the
+		// queue is shut down in removeWorker, so awaiting it here would hang the
+		// spawn forever. `deliverMessage` → `maybeRetrigger` re-entry handles
+		// messages that arrive after the queue is drained.
+		void this.runtime.drainMessages(agentId, (message) => session.deliverMessage(message));
 	}
 
 	private async onWorkerMessaged(event: RuntimeEvent): Promise<void> {
@@ -348,6 +481,8 @@ export class WorkerExecutor {
 		this.finalizedWorkers.clear();
 		this.detachedRegistry.dispose();
 		this.forkWorkers.clear();
+		this.forkEntries.clear();
+		this.forkMeta.clear();
 		if (activeWorkerExecutor === this) {
 			activeWorkerExecutor = undefined;
 		}

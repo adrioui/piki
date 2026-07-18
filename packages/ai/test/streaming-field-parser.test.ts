@@ -141,6 +141,52 @@ describe("StreamingFieldParser", () => {
 	});
 });
 
+describe("StreamingFieldParser partial-number no false abort", () => {
+	it("keeps a partially streamed number valid across chunks", () => {
+		const schema = typeboxToStreamingSchema(Type.Object({ x: Type.Number() }));
+		const parser = new StreamingFieldParser(schema);
+		for (const chunk of ["{", '"x":1', ".5", "e3"]) {
+			parser.push(chunk);
+			expect(parser.valid).toBe(true);
+		}
+		parser.push("}");
+		expect(parser.valid).toBe(true);
+		expect((parser.partial as { x: number }).x).toBe(1.5e3);
+	});
+
+	it("keeps a partially streamed boolean valid across chunks", () => {
+		const schema = typeboxToStreamingSchema(Type.Object({ flag: Type.Boolean() }));
+		const parser = new StreamingFieldParser(schema);
+		for (const chunk of ["{", '"flag":tru', "e"]) {
+			parser.push(chunk);
+			expect(parser.valid).toBe(true);
+		}
+		parser.push("}");
+		expect(parser.valid).toBe(true);
+		expect((parser.partial as { flag: boolean }).flag).toBe(true);
+	});
+
+	it("keeps a partially streamed number inside an array valid across chunks", () => {
+		const schema = typeboxToStreamingSchema(Type.Object({ values: Type.Array(Type.Number()) }));
+		const parser = new StreamingFieldParser(schema);
+		for (const chunk of ["{", '"values":[1', ".5", "e3]"]) {
+			parser.push(chunk);
+			expect(parser.valid).toBe(true);
+		}
+		parser.push("}");
+		expect(parser.valid).toBe(true);
+		expect((parser.partial as { values: number[] }).values).toEqual([1.5e3]);
+	});
+
+	it("still aborts on a genuinely complete wrong-type value", () => {
+		const schema = typeboxToStreamingSchema(Type.Object({ x: Type.Number() }));
+		const parser = new StreamingFieldParser(schema);
+		parser.push('{"x":"hello"}');
+		expect(parser.valid).toBe(false);
+		expect(parser.validationIssue).toContain("expected type number");
+	});
+});
+
 describe("typeboxToGbnf", () => {
 	it("generates GBNF for simple object", () => {
 		const gbnf = typeboxToGbnf(Type.Object({ name: Type.String() }));

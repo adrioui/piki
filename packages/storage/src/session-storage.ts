@@ -1,7 +1,8 @@
-import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import { uuidv7 } from "@piki/agent-core";
 import { Context, Data, Effect, Layer } from "effect";
+import { atomicWriteFile } from "./atomic-write.ts";
 import { GlobalStorageTag } from "./global-storage.ts";
 import { type GlobalStoragePaths, SCRATCHPAD_SUBDIRS } from "./paths.ts";
 import { VersionTag } from "./version.ts";
@@ -85,8 +86,7 @@ function readJsonFile<T>(path: string, operation: string): Effect.Effect<T, Sess
 function writeJsonFile(path: string, value: unknown, operation: string): Effect.Effect<void, SessionStorageError> {
 	return Effect.tryPromise({
 		try: async () => {
-			await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-			await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+			await atomicWriteFile(path, value);
 		},
 		catch: (cause) => fail(operation, `Failed to write JSON file ${path}`, cause),
 	});

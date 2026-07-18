@@ -31,7 +31,7 @@ function createAssistantMessage(text: string): AssistantMessage {
 }
 
 function setup(options: { activeTools?: string[]; selectChoice?: string; editorText?: string } = {}) {
-	let activeTools = options.activeTools ?? ["read", "bash", "edit", "write"];
+	let activeTools = options.activeTools ?? ["read", "shell", "edit", "write"];
 	const commands = new Map<string, CommandHandler>();
 	let agentEndHandler: AgentEndHandler | undefined;
 
@@ -105,15 +105,15 @@ function setup(options: { activeTools?: string[]; selectChoice?: string; editorT
 describe("plan-mode example extension", () => {
 	it("preserves custom active tools while toggling plan mode", async () => {
 		const { activeTools, runCommand, setActiveTools } = setup({
-			activeTools: ["read", "bash", "edit", "write", "echo_tool"],
+			activeTools: ["read", "shell", "edit", "write", "echo_tool"],
 		});
 
 		await runCommand("plan");
 
-		expect(activeTools()).toEqual(["read", "bash", "echo_tool", "grep", "find", "ls", "questionnaire"]);
+		expect(activeTools()).toEqual(["read", "shell", "echo_tool", "grep", "find", "ls", "questionnaire"]);
 		expect(setActiveTools).toHaveBeenLastCalledWith([
 			"read",
-			"bash",
+			"shell",
 			"echo_tool",
 			"grep",
 			"find",
@@ -123,8 +123,8 @@ describe("plan-mode example extension", () => {
 
 		await runCommand("plan");
 
-		expect(activeTools()).toEqual(["read", "bash", "edit", "write", "echo_tool"]);
-		expect(setActiveTools).toHaveBeenLastCalledWith(["read", "bash", "edit", "write", "echo_tool"]);
+		expect(activeTools()).toEqual(["read", "shell", "edit", "write", "echo_tool"]);
+		expect(setActiveTools).toHaveBeenLastCalledWith(["read", "shell", "edit", "write", "echo_tool"]);
 	});
 
 	it("does not prompt when the assistant response contains no plan", async () => {
@@ -151,14 +151,14 @@ describe("plan-mode example extension", () => {
 
 	it("queues plan execution as a follow-up custom message", async () => {
 		const { activeTools, runCommand, sendMessage, triggerAgentEnd } = setup({
-			activeTools: ["read", "bash", "edit", "write", "echo_tool"],
+			activeTools: ["read", "shell", "edit", "write", "echo_tool"],
 			selectChoice: "Execute the plan (track progress)",
 		});
 
 		await runCommand("plan");
 		await triggerAgentEnd("Plan:\n1. Inspect the current implementation\n2. Add a regression test");
 
-		expect(activeTools()).toEqual(["read", "bash", "edit", "write", "echo_tool"]);
+		expect(activeTools()).toEqual(["read", "shell", "edit", "write", "echo_tool"]);
 		expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ customType: "plan-mode-execute" }), {
 			triggerTurn: true,
 			deliverAs: "followUp",

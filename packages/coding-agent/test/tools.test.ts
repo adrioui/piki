@@ -4,7 +4,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeBashWithOperations } from "../src/core/bash-executor.ts";
-import { type BashOperations, createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
+import {
+	type BashOperations,
+	createBashTool,
+	createLocalBashOperations,
+	createShellTool,
+} from "../src/core/tools/bash.ts";
 import { computeEditsDiff } from "../src/core/tools/edit-diff.ts";
 import {
 	createEditTool,
@@ -76,7 +81,11 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(result)).toBe(content);
 			// No truncation message since file fits within limits
 			expect(getTextOutput(result)).not.toContain("Use offset=");
-			expect(result.details).toBeUndefined();
+			// mag parity: truncation details object is always present, not undefined.
+			expect(result.details?.truncation).toBeDefined();
+			expect(result.details?.truncation?.truncated).toBe(false);
+			expect(result.details?.truncation?.totalLines).toBe(3);
+			expect(result.details?.truncation?.outputLines).toBe(3);
 		});
 
 		it("should handle non-existent files", async () => {
@@ -96,21 +105,32 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 1");
 			expect(output).toContain("Line 2000");
 			expect(output).not.toContain("Line 2001");
-			expect(output).toContain("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]");
+			// mag parity continuation notice (line-based).
+			expect(output).toContain("... (500 more lines remaining. Use offset=2001 to continue reading.)");
+			expect(output).not.toContain("Line 2001");
+			expect(result.details?.truncation?.truncated).toBe(true);
+			expect(result.details?.truncation?.truncatedBy).toBe("lines");
+			expect(result.details?.truncation?.totalLines).toBe(2500);
+			expect(result.details?.truncation?.outputLines).toBe(2000);
 		});
 
-		it("should truncate when byte limit exceeded", async () => {
-			const testFile = join(testDir, "large-bytes.txt");
-			// Create file that exceeds 50KB byte limit but has fewer than 2000 lines
-			const lines = Array.from({ length: 500 }, (_, i) => `Line ${i + 1}: ${"x".repeat(200)}`);
+		it("should truncate when line limit exceeded (mag is line-only, no byte cap)", async () => {
+			const testFile = join(testDir, "large-lines.txt");
+			// 2500 short lines: exceeds the 2000-line cap (mag has no byte-based truncation).
+			const lines = Array.from({ length: 2500 }, (_, i) => `Line ${i + 1}`);
 			writeFileSync(testFile, lines.join("\n"));
 
 			const result = await readTool.execute("test-call-4", { path: testFile });
 			const output = getTextOutput(result);
 
-			expect(output).toContain("Line 1:");
-			// Should show byte limit message
-			expect(output).toMatch(/\[Showing lines 1-\d+ of 500 \(.* limit\)\. Use offset=\d+ to continue\.\]/);
+			expect(output).toContain("Line 1");
+			expect(output).toContain("Line 2000");
+			expect(output).not.toContain("Line 2001");
+			// mag parity continuation notice (line-based).
+			expect(output).toContain("... (500 more lines remaining. Use offset=2001 to continue reading.)");
+			expect(result.details?.truncation?.truncated).toBe(true);
+			expect(result.details?.truncation?.totalLines).toBe(2500);
+			expect(result.details?.truncation?.outputLines).toBe(2000);
 		});
 
 		it("should handle offset parameter", async () => {
@@ -139,7 +159,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 1");
 			expect(output).toContain("Line 10");
 			expect(output).not.toContain("Line 11");
-			expect(output).toContain("[90 more lines in file. Use offset=11 to continue.]");
+			expect(output).toContain("... (90 more lines remaining. Use offset=11 to continue reading.)");
 		});
 
 		it("should handle offset + limit together", async () => {
@@ -158,7 +178,7 @@ describe("Coding Agent Tools", () => {
 			expect(output).toContain("Line 41");
 			expect(output).toContain("Line 60");
 			expect(output).not.toContain("Line 61");
-			expect(output).toContain("[40 more lines in file. Use offset=61 to continue.]");
+			expect(output).toContain("... (40 more lines remaining. Use offset=61 to continue reading.)");
 		});
 
 		it("should show error when offset is beyond file length", async () => {
@@ -244,8 +264,8 @@ describe("Coding Agent Tools", () => {
 
 			const result = await writeTool.execute("test-call-3", { path: testFile, content });
 
-			expect(getTextOutput(result)).toContain("Successfully wrote");
-			expect(getTextOutput(result)).toContain(testFile);
+			// mag write tool has outputSchema Void (empty model-visible content). piki mirrors this.
+			expect(getTextOutput(result)).toBe("");
 			expect(result.details).toBeUndefined();
 		});
 
@@ -255,7 +275,10 @@ describe("Coding Agent Tools", () => {
 
 			const result = await writeTool.execute("test-call-4", { path: testFile, content });
 
-			expect(getTextOutput(result)).toContain("Successfully wrote");
+			// mag's write tool has outputSchema Void: the model-visible content is
+			// empty. piki mirrors this (D1/G-write-empty parity fix).
+			expect(getTextOutput(result)).toBe("");
+			expect(result.details).toBeUndefined();
 		});
 	});
 
@@ -266,11 +289,13 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, originalContent);
 
 			const result = await editTool.execute("test-call-5", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [{ old: "world", new: "testing" }],
 			});
 
-			expect(getTextOutput(result)).toContain("Successfully replaced");
+			expect(getTextOutput(result)).toContain("Replaced 1 line(s) with 1 line(s)");
 			expect(result.details).toBeDefined();
 			expect(result.details.diff).toBeDefined();
 			expect(typeof result.details.diff).toBe("string");
@@ -290,6 +315,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-6", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [{ old: "nonexistent", new: "testing" }],
 				}),
@@ -301,6 +328,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-6b", {
+					old: "",
+					new: "",
 					path: missingFile,
 					edits: [{ old: "hello", new: "world" }],
 				}),
@@ -314,6 +343,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-7", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [{ old: "foo", new: "bar" }],
 				}),
@@ -325,6 +356,8 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "alpha\nbeta\ngamma\ndelta\n");
 
 			const result = await editTool.execute("test-call-8", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [
 					{ old: "alpha\n", new: "ALPHA\n" },
@@ -332,7 +365,7 @@ describe("Coding Agent Tools", () => {
 				],
 			});
 
-			expect(getTextOutput(result)).toContain("Successfully replaced 2 block(s)");
+			expect(getTextOutput(result)).toContain("Replaced 2 occurrences");
 			expect(readFileSync(testFile, "utf-8")).toBe("ALPHA\nbeta\nGAMMA\ndelta\n");
 			expect(result.details?.diff).toContain("ALPHA");
 			expect(result.details?.diff).toContain("GAMMA");
@@ -344,6 +377,8 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, `${lines.join("\n")}\n`);
 
 			const result = await editTool.execute("test-call-8b", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [
 					{ old: "line 100\n", new: "LINE 100\n" },
@@ -366,6 +401,8 @@ describe("Coding Agent Tools", () => {
 			writeFileSync(testFile, "foo\nbar\nbaz\n");
 
 			await editTool.execute("test-call-9", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [
 					{ old: "foo\n", new: "foo bar\n" },
@@ -382,10 +419,12 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-11", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [],
 				}),
-			).rejects.toThrow(/edits must contain at least one replacement/);
+			).rejects.toThrow(/Edit tool input is invalid/);
 		});
 
 		it("should fail when multi-edit regions overlap", async () => {
@@ -394,6 +433,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-12", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [
 						{ old: "one\ntwo\n", new: "ONE\nTWO\n" },
@@ -410,6 +451,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-13", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [
 						{ old: "alpha\n", new: "ALPHA\n" },
@@ -428,6 +471,8 @@ describe("Coding Agent Tools", () => {
 
 			await expect(
 				editTool.execute("test-call-14", {
+					old: "",
+					new: "",
 					path: testFile,
 					edits: [{ old: "hello", new: "world" }],
 				}),
@@ -448,6 +493,8 @@ describe("Coding Agent Tools", () => {
 			await expect(
 				genericFailureTool.execute("test-call-16", {
 					path: "broken.txt",
+					old: "",
+					new: "",
 					edits: [{ old: "hello", new: "world" }],
 				}),
 			).rejects.toThrow("Could not edit file: broken.txt. Error: disk offline.");
@@ -480,9 +527,9 @@ describe("Coding Agent Tools", () => {
 		});
 
 		it("should handle command errors", async () => {
-			await expect(bashTool.execute("test-call-9", { command: "exit 1" })).rejects.toThrow(
-				/(Command failed|code 1)/,
-			);
+			const result = await bashTool.execute("test-call-9", { command: "exit 1" });
+			expect(getTextOutput(result)).not.toContain("Command exited with code 1");
+			expect(result.details?.exitCode).toBe(1);
 		});
 
 		it("should respect timeout", async () => {
@@ -769,6 +816,76 @@ describe("Coding Agent Tools", () => {
 		});
 	});
 
+	describe("shell tool", () => {
+		it("should run a fast command in the foreground and return output", async () => {
+			const shell = createShellTool(testDir);
+			const result = await shell.execute("test-shell-1", { command: "echo shell-output" });
+			expect(getTextOutput(result)).toContain("shell-output");
+			expect(result.details?.autoDetach).toBeUndefined();
+		});
+
+		it("should behave like bash when detach_after is omitted", async () => {
+			const shell = createShellTool(testDir);
+			const result = await shell.execute("test-shell-2", { command: "echo no-detach" });
+			expect(getTextOutput(result)).toContain("no-detach");
+		});
+
+		it("should auto-detach a long-running command after detach_after instead of killing it", async () => {
+			const shell = createShellTool(testDir);
+			// detach_after: 1s, but the command keeps running past the threshold.
+			const result = await shell.execute("test-shell-3", { command: "sleep 10; echo done", detach_after: 1 });
+
+			const details = result.details;
+			expect(details?.autoDetach).toBeDefined();
+			expect(details?.autoDetach?.detached).toBe(true);
+			expect(details?.autoDetach?.pid).toBeTypeOf("number");
+			expect(typeof details?.autoDetach?.logPath).toBe("string");
+			expect(getTextOutput(result)).toContain("Command detached after 1s");
+			expect(getTextOutput(result)).not.toContain("timed out");
+			expect(getTextOutput(result)).not.toContain("done");
+		});
+
+		it("should not detach a command that finishes before detach_after", async () => {
+			const ops: BashOperations = {
+				exec: async (_command, _cwd, { onData }) => {
+					onData(Buffer.from("fast-finish\n", "utf-8"));
+					return { exitCode: 0 };
+				},
+			};
+			const shell = createShellTool(testDir, { operations: ops });
+			const result = await shell.execute("test-shell-4", { command: "true", detach_after: 30 });
+
+			expect(result.details?.autoDetach).toBeUndefined();
+			expect(getTextOutput(result)).toContain("fast-finish");
+		});
+
+		it("should fall back to a hard timeout for non-local backends (no detach)", async () => {
+			let capturedTimeout: number | undefined;
+			const ops: BashOperations = {
+				isLocal: false,
+				exec: async (_command, _cwd, { timeout, signal }) => {
+					capturedTimeout = timeout;
+					// A custom (non-local) backend must enforce its own timeout. Here we
+					// just record that the threshold was forwarded and honor abort.
+					await new Promise<void>((resolve, reject) => {
+						const t = setTimeout(resolve, 200);
+						signal?.addEventListener("abort", () => {
+							clearTimeout(t);
+							reject(new Error("timeout:1"));
+						});
+					});
+					return { exitCode: 0 };
+				},
+			};
+			const shell = createShellTool(testDir, { operations: ops });
+
+			const result = await shell.execute("test-shell-5", { command: "remote", detach_after: 1 });
+
+			expect(capturedTimeout).toBe(1);
+			expect(result.details?.autoDetach).toBeUndefined();
+		});
+	});
+
 	describe("grep tool", () => {
 		it("should include filename when searching a single file", async () => {
 			const testFile = join(testDir, "example.txt");
@@ -910,11 +1027,13 @@ describe("edit tool fuzzy matching", () => {
 
 		// old without trailing whitespace should still match
 		const result = await editTool.execute("test-fuzzy-1", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "line one\nline two\n", new: "replaced\n" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toBe("replaced\nline three\n");
 	});
@@ -924,11 +1043,13 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, "你好，世界\n你好（世界）\n");
 
 		const result = await editTool.execute("test-fuzzy-chinese", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "你好,世界\n你好(世界)\n", new: "你好，piki\n你好(piki)\n" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toBe("你好，piki\n你好(piki)\n");
 	});
@@ -938,11 +1059,13 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, "ＡＢＣ１２３\ncafe\u0301\n");
 
 		const result = await editTool.execute("test-fuzzy-unicode", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "ABC123\ncafé\n", new: "XYZ789\ncoffee\n" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toBe("XYZ789\ncoffee\n");
 	});
@@ -954,11 +1077,13 @@ describe("edit tool fuzzy matching", () => {
 
 		// old with ASCII quotes should match
 		const result = await editTool.execute("test-fuzzy-2", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "console.log('hello');", new: "console.log('world');" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toContain("world");
 	});
@@ -970,11 +1095,13 @@ describe("edit tool fuzzy matching", () => {
 
 		// old with ASCII quotes should match
 		const result = await editTool.execute("test-fuzzy-3", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: 'const msg = "Hello World";', new: 'const msg = "Goodbye";' }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toContain("Goodbye");
 	});
@@ -986,11 +1113,13 @@ describe("edit tool fuzzy matching", () => {
 
 		// old with ASCII hyphens should match
 		const result = await editTool.execute("test-fuzzy-4", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "range: 1-5\nbreak-here", new: "range: 10-50\nbreak--here" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toContain("10-50");
 	});
@@ -1002,11 +1131,13 @@ describe("edit tool fuzzy matching", () => {
 
 		// old with regular space should match
 		const result = await editTool.execute("test-fuzzy-5", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "hello world", new: "hello universe" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toContain("universe");
 	});
@@ -1017,11 +1148,13 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, "const x = 'exact';\nconst y = 'other';\n");
 
 		const result = await editTool.execute("test-fuzzy-6", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "const x = 'exact';", new: "const x = 'changed';" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 		const content = readFileSync(testFile, "utf-8");
 		expect(content).toBe("const x = 'changed';\nconst y = 'other';\n");
 	});
@@ -1032,6 +1165,8 @@ describe("edit tool fuzzy matching", () => {
 
 		await expect(
 			editTool.execute("test-fuzzy-7", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [{ old: "this does not exist", new: "replacement" }],
 			}),
@@ -1045,6 +1180,8 @@ describe("edit tool fuzzy matching", () => {
 
 		await expect(
 			editTool.execute("test-fuzzy-8", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [{ old: "hello world", new: "replaced" }],
 			}),
@@ -1056,6 +1193,8 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, "console.log(\u2018hello\u2019);\nhello\u00A0world\n");
 
 		await editTool.execute("test-fuzzy-9", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [
 				{ old: "console.log('hello');\n", new: "console.log('world');\n" },
@@ -1072,6 +1211,8 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, originalContent);
 
 		const result = await editTool.execute("test-fuzzy-preserve-duplicate-line", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "replace me\n", new: "after\n" }],
 		});
@@ -1096,6 +1237,8 @@ describe("edit tool fuzzy matching", () => {
 		writeFileSync(testFile, originalContent);
 
 		const result = await editTool.execute("test-fuzzy-preserve-multi", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [
 				{ old: "first target\nfirst after", new: "FIRST\nFIRST2" },
@@ -1136,11 +1279,13 @@ describe("edit tool CRLF handling", () => {
 		writeFileSync(testFile, "line one\r\nline two\r\nline three\r\n");
 
 		const result = await editTool.execute("test-crlf-1", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "line two\n", new: "replaced line\n" }],
 		});
 
-		expect(getTextOutput(result)).toContain("Successfully replaced");
+		expect(getTextOutput(result)).toContain("Replaced");
 	});
 
 	it("should preserve CRLF line endings after edit", async () => {
@@ -1148,6 +1293,8 @@ describe("edit tool CRLF handling", () => {
 		writeFileSync(testFile, "first\r\nsecond\r\nthird\r\n");
 
 		await editTool.execute("test-crlf-2", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "second\n", new: "REPLACED\n" }],
 		});
@@ -1161,6 +1308,8 @@ describe("edit tool CRLF handling", () => {
 		writeFileSync(testFile, "first\nsecond\nthird\n");
 
 		await editTool.execute("test-lf-1", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "second\n", new: "REPLACED\n" }],
 		});
@@ -1176,6 +1325,8 @@ describe("edit tool CRLF handling", () => {
 
 		await expect(
 			editTool.execute("test-crlf-dup", {
+				old: "",
+				new: "",
 				path: testFile,
 				edits: [{ old: "hello\nworld\n", new: "replaced\n" }],
 			}),
@@ -1187,6 +1338,8 @@ describe("edit tool CRLF handling", () => {
 		writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\n");
 
 		await editTool.execute("test-bom", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [{ old: "second\n", new: "REPLACED\n" }],
 		});
@@ -1200,6 +1353,8 @@ describe("edit tool CRLF handling", () => {
 		writeFileSync(testFile, "\uFEFFfirst\r\nsecond\r\nthird\r\nfourth\r\n");
 
 		await editTool.execute("test-crlf-multi", {
+			old: "",
+			new: "",
 			path: testFile,
 			edits: [
 				{ old: "second\n", new: "SECOND\n" },

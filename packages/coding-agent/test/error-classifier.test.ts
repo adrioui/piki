@@ -93,16 +93,16 @@ describe("error-classifier", () => {
 			expect(result.retryable).toBe(false);
 		});
 
-		it("classifies 408 as timeout, retryable", () => {
+		it("classifies 408 as timeout, non-retryable", () => {
 			const result = classifyByStatus(408);
 			expect(result.category).toBe("timeout");
-			expect(result.retryable).toBe(true);
+			expect(result.retryable).toBe(false);
 		});
 
-		it("classifies 409 as conflict, retryable", () => {
+		it("classifies 409 as conflict, non-retryable", () => {
 			const result = classifyByStatus(409);
 			expect(result.category).toBe("conflict");
-			expect(result.retryable).toBe(true);
+			expect(result.retryable).toBe(false);
 		});
 
 		it("classifies 429 as rate_limited with delay from headers", () => {
@@ -130,6 +130,14 @@ describe("error-classifier", () => {
 				expect(result.category).toBe("server_error");
 				expect(result.retryable).toBe(true);
 			}
+		});
+
+		it("keeps 429 retryable and 503 retryable (unchanged parity)", () => {
+			const r429 = classifyByStatus(429);
+			expect(r429.retryable).toBe(true);
+			const r503 = classifyByStatus(503);
+			expect(r503.retryable).toBe(true);
+			expect(r503.category).toBe("server_error");
 		});
 
 		it("classifies 4xx as client_error, non-retryable", () => {
@@ -215,6 +223,30 @@ describe("error-classifier", () => {
 			const result2 = classifyError("Error code: 403 - Forbidden");
 			expect(result2.category).toBe("auth");
 			expect(result2.retryable).toBe(false);
+		});
+
+		it("does NOT classify 'author' substring as auth", () => {
+			const result = classifyError("Unknown author of commit");
+			expect(result.category).not.toBe("auth");
+		});
+		it("does NOT classify 'reauthorize' as auth", () => {
+			const result = classifyError("Please reauthorize the session token");
+			expect(result.category).not.toBe("auth");
+		});
+		it("does NOT classify 'authoritative' as auth", () => {
+			const result = classifyError("Response was authoritative");
+			expect(result.category).not.toBe("auth");
+		});
+		it("does NOT classify 'authorization' as auth", () => {
+			const result = classifyError("Missing authorization header for request");
+			expect(result.category).not.toBe("auth");
+		});
+		it("still classifies real auth failures", () => {
+			expect(classifyError("Authentication failed").category).toBe("auth");
+			expect(classifyError("invalid api key").category).toBe("auth");
+			expect(classifyError("401 Unauthorized").category).toBe("auth");
+			expect(classifyError("Credentials expired").category).toBe("auth");
+			expect(classifyError("Auth error").category).toBe("auth");
 		});
 
 		it("does not extract port numbers as HTTP status", () => {

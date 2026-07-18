@@ -120,8 +120,8 @@ describe("built-in edit and write tools", () => {
 		});
 
 		await Promise.all([
-			editTool.execute("call-1", { path: filePath, edits: [{ old: "alpha", new: "ALPHA" }] }),
-			editTool.execute("call-2", { path: filePath, edits: [{ old: "beta", new: "BETA" }] }),
+			editTool.execute("call-1", { path: filePath, old: "", new: "", edits: [{ old: "alpha", new: "ALPHA" }] }),
+			editTool.execute("call-2", { path: filePath, old: "", new: "", edits: [{ old: "beta", new: "BETA" }] }),
 		]);
 
 		const content = await readFile(filePath, "utf8");
@@ -159,6 +159,8 @@ describe("built-in edit and write tools", () => {
 
 		const editPromise = editTool.execute("call-1", {
 			path: filePath,
+			old: "",
+			new: "",
 			edits: [{ old: "original", new: "edited" }],
 		});
 		await delay(5);
@@ -252,7 +254,7 @@ describe("built-in edit and write tools", () => {
 		const controller = new AbortController();
 		const firstEdit = editTool.execute(
 			"call-1",
-			{ path: filePath, edits: [{ old: "alpha", new: "ALPHA" }] },
+			{ path: filePath, old: "", new: "", edits: [{ old: "alpha", new: "ALPHA" }] },
 			controller.signal,
 		);
 		await firstWriteStarted.promise;
@@ -260,6 +262,8 @@ describe("built-in edit and write tools", () => {
 
 		const secondEdit = editTool.execute("call-2", {
 			path: filePath,
+			old: "",
+			new: "",
 			edits: [{ old: "beta", new: "BETA" }],
 		});
 		expect(await resolvesWithin(secondWriteStarted.promise, 20)).toBe(false);

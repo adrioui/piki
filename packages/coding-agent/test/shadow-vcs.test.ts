@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
+import { createSnapshot } from "../src/core/snapshot.ts";
 import { createCheckpointChangesToolDefinition } from "../src/core/tools/checkpoint-changes.ts";
 import { createCheckpointRollbackToolDefinition } from "../src/core/tools/checkpoint-rollback.ts";
 import { makeShadowVcsLayer, ShadowVcsTag } from "../src/core/vcs/shadow-vcs.ts";
@@ -11,7 +12,10 @@ import { makeShadowVcsLayer, ShadowVcsTag } from "../src/core/vcs/shadow-vcs.ts"
 const tempDirs: string[] = [];
 
 function makeRepo(): string {
-	const dir = mkdtempSync(join(tmpdir(), "piki-shadow-vcs-"));
+	// The snapshot-based rollback tool requires the workspace to live inside the
+	// user's home directory (isSafeVcsWorkspace guard), so create it there
+	// rather than under the shared /tmp.
+	const dir = mkdtempSync(join(homedir(), ".piki-shadow-vcs-"));
 	tempDirs.push(dir);
 	execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
 	execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir, stdio: "pipe" });
@@ -101,18 +105,22 @@ describe("ShadowVcs", () => {
 				Effect.gen(function* () {
 					const vcs = yield* ShadowVcsTag;
 					yield* vcs.record({ message: "baseline" });
+					// Capture a snapshot at the baseline so the rollback tool can
+					// address it by message id (the WIP snapshot-selector API no
+					// longer accepts git refs like "head").
+					createSnapshot(repo, "session-1", "baseline");
 					writeFileSync(join(repo, "tracked.txt"), "tool changed\n", "utf8");
 					writeFileSync(join(repo, "other.txt"), "keep\n", "utf8");
 
 					const changes = createCheckpointChangesToolDefinition(repo, "session-1");
 					const rollback = createCheckpointRollbackToolDefinition(repo, "session-1", vcs);
 					const changesResult = yield* Effect.promise(() =>
-						changes.execute("changes-1", { since: "head", glob: "tracked.txt" }, undefined, undefined, {
+						changes.execute("changes-1", { since: "baseline", glob: "tracked.txt" }, undefined, undefined, {
 							sessionManager: { getSessionId: () => "session-1" },
 						} as never),
 					);
 					const rollbackResult = yield* Effect.promise(() =>
-						rollback.execute("rollback-1", { since: "head", glob: "tracked.txt" }, undefined, undefined, {
+						rollback.execute("rollback-1", { since: "baseline", glob: "tracked.txt" }, undefined, undefined, {
 							sessionManager: { getSessionId: () => "session-1" },
 						} as never),
 					);

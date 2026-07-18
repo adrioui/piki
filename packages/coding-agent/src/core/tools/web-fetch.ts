@@ -230,11 +230,8 @@ export function createWebFetchToolDefinition(): ToolDefinition<typeof webFetchSc
 					details: { url: params.url, contentLength: text.length, truncated: text.length > maxLength },
 				};
 			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				return {
-					content: [{ type: "text", text: `Web fetch failed: ${msg}` }],
-					details: { error: true, message: msg },
-				};
+				if (err instanceof Error) throw err;
+				throw new Error(String(err));
 			} finally {
 				await fetchResult?.close();
 				if (timeout) clearTimeout(timeout);

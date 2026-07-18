@@ -19,9 +19,11 @@ export interface Args {
 	thinking?: ThinkingLevel;
 	continue?: boolean;
 	resume?: boolean;
+	/** Optional session id for inline `--resume [id]` (alpha22 `--resume [id]`). */
+	resumeId?: string;
 	help?: boolean;
 	version?: boolean;
-	mode?: Mode;
+	mode?: Mode | "rpc";
 	agentMode?: AgentMode;
 	name?: string;
 	noSession?: boolean;
@@ -37,10 +39,19 @@ export interface Args {
 	extensions?: string[];
 	noExtensions?: boolean;
 	print?: boolean;
+	debug?: boolean;
+	solo?: boolean;
+	headless?: boolean;
+	systemOverride?: string;
+	disableShellSafeguards?: boolean;
+	disableCwdSafeguards?: boolean;
+	autopilot?: boolean;
+	/** Initial goal objective (alpha22 --goal) */
+	goal?: string;
 	export?: string;
 	atif?: string;
 	/** ATIF schema shape: "pi" (default) or "flat" (flat-schema export) */
-	atifSchema?: "pi" | "flat";
+	atifSchema?: "alpha22" | "flat" | "pi" | "legacy";
 	noSkills?: boolean;
 	skills?: string[];
 	promptTemplates?: string[];
@@ -84,12 +95,17 @@ export function parseArgs(args: string[]): Args {
 
 		if (arg === "--help" || arg === "-h") {
 			result.help = true;
-		} else if (arg === "--version" || arg === "-v") {
+		} else if (arg === "--version" || arg === "-v" || arg === "-V") {
 			result.version = true;
 		} else if (arg === "--mode" && i + 1 < args.length) {
 			const mode = args[++i];
-			if (mode === "text" || mode === "json") {
+			if (mode === "text" || mode === "json" || mode === "rpc") {
 				result.mode = mode;
+			} else {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid mode "${mode}". Valid values: text, json, rpc`,
+				});
 			}
 		} else if (arg === "--agent-mode" && i + 1 < args.length) {
 			const mode = args[++i];
@@ -105,6 +121,11 @@ export function parseArgs(args: string[]): Args {
 			result.continue = true;
 		} else if (arg === "--resume" || arg === "-r") {
 			result.resume = true;
+			const next = args[i + 1];
+			if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
+				result.resumeId = next;
+				i++;
+			}
 		} else if (arg === "--provider" && i + 1 < args.length) {
 			result.provider = args[++i];
 		} else if (arg === "--model" && i + 1 < args.length) {
@@ -112,6 +133,34 @@ export function parseArgs(args: string[]): Args {
 		} else if (arg === "--api-key" && i + 1 < args.length) {
 			result.apiKey = args[++i];
 		} else if (arg === "--system-prompt" && i + 1 < args.length) {
+			result.systemPrompt = args[++i];
+		} else if (arg === "--debug") {
+			result.debug = true;
+		} else if (arg === "--headless") {
+			result.headless = true;
+			result.print = true;
+		} else if (arg === "--prompt" && i + 1 < args.length) {
+			result.messages.push(args[++i]);
+			result.print = true;
+		} else if (arg === "--solo") {
+			result.excludeTools = [
+				...(result.excludeTools ?? []),
+				"createTask",
+				"updateTask",
+				"spawnWorker",
+				"killWorker",
+				"reassignWorker",
+				"messageWorker",
+			];
+		} else if (arg === "--disable-shell-safeguards") {
+			result.disableShellSafeguards = true;
+		} else if (arg === "--disable-cwd-safeguards") {
+			result.disableCwdSafeguards = true;
+		} else if (arg === "--autopilot") {
+			result.autopilot = true;
+		} else if (arg === "--goal" && i + 1 < args.length) {
+			result.goal = args[++i];
+		} else if (arg === "--system-override" && i + 1 < args.length) {
 			result.systemPrompt = args[++i];
 		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
 			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
@@ -171,12 +220,12 @@ export function parseArgs(args: string[]): Args {
 			result.atif = args[++i];
 		} else if (arg === "--atif-schema" && i + 1 < args.length) {
 			const schema = args[++i];
-			if (schema === "pi" || schema === "flat") {
+			if (schema === "alpha22" || schema === "flat" || schema === "pi" || schema === "legacy") {
 				result.atifSchema = schema;
 			} else {
 				result.diagnostics.push({
 					type: "error",
-					message: `Invalid ATIF schema "${schema}". Valid values: pi, flat`,
+					message: `Invalid ATIF schema "${schema}". Valid values: alpha22, flat, pi, legacy`,
 				});
 			}
 		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
@@ -274,6 +323,7 @@ ${chalk.bold("Commands:")}
   ${APP_NAME} sessions search [query]   Search saved sessions
   ${APP_NAME} sessions export <id|path> Export a saved session as Markdown or JSON
   ${APP_NAME} taste <subcommand> [source] Manage taste profiles and git-history learning
+  ${APP_NAME} serve                        Start read-only HTTP/RPC serve mode (--help for options)
   ${APP_NAME} <command> --help          Show help for install/remove/uninstall/update/list
 
 ${chalk.bold("Options:")}
@@ -282,11 +332,20 @@ ${chalk.bold("Options:")}
   --api-key <key>                API key (defaults to env vars)
   --system-prompt <text>         System prompt (default: coding assistant prompt)
   --append-system-prompt <text>  Append text or file contents to the system prompt (can be used multiple times)
+  --debug                        Enable debug mode (verbose logs)
+  --headless                     Run headless (no TUI, output to stdout)
+  --prompt <text>                Start session with an initial user message (alias of -p)
+  --solo                         Run without worker/task tools (keeps file/shell tools)
+  --disable-shell-safeguards     Allow forbidden/mass-destructive shell and destructive git/rm/chmod commands
+  --disable-cwd-safeguards       Allow workers to write outside the project cwd
+  --autopilot                    Launch with autopilot enabled
+  --goal <objective>             Seed the session with an initial goal (alpha22 --goal)
+  --system-override <text>       Override leader system prompt with raw text (alias of --system-prompt)
   --mode <mode>                  Output mode: text (default) or json
   --agent-mode <mode>            Tool mode: default, read-only, plan, or build
   --print, -p                    Non-interactive mode: process prompt and exit
   --continue, -c                 Continue previous session
-  --resume, -r                   Select a session to resume
+  --resume, -r [id]              Resume latest (or a specific session by ID)
   --session <path|id>            Use specific session file or partial UUID
   --session-id <id>              Use exact project session ID, creating it if missing
   --fork <path|id>               Fork specific session file or partial UUID into a new session
@@ -319,7 +378,7 @@ ${chalk.bold("Options:")}
   --no-approve, -na              Ignore project-local files for this run
   --offline                      Disable startup network operations (same as PIKI_OFFLINE=1)
   --help, -h                     Show this help
-  --version, -v                  Show version number
+  --version, -v, -V              Show version number
 
 Extensions can register additional flags (e.g., --plan from plan-mode extension).${extensionFlagsText}
 

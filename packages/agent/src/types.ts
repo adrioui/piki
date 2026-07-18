@@ -298,6 +298,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * the turn was interrupted and results should be dropped.
 	 */
 	checkEpoch?: () => boolean | undefined;
+
+	/**
+	 * Resolves the execution timeout (ms) for a tool call by name.
+	 *
+	 * Return a number to enforce a per-call deadline via AbortSignal, or
+	 * `undefined` for no timeout. The runtime aborts the tool when the deadline
+	 * elapses, so tools that honor `signal` are cancelled automatically. This is
+	 * a safety net covering every tool uniformly (read, edit, grep, extensions,
+	 * MCP) without each tool re-implementing deadlines.
+	 */
+	toolTimeout?: (toolName: string) => number | undefined;
 }
 
 /**

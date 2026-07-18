@@ -12,6 +12,7 @@
 				"@piki/agent-core": "^0.80.2",
 				"@piki/ai": "^0.80.2",
 				"@piki/event-core": "^0.80.2",
+				"@piki/skills": "^0.80.2",
 				"@piki/tui": "^0.80.2",
 				"@silvia-odwyer/photon-node": "0.3.4",
 				"chalk": "5.6.2",
@@ -800,6 +801,19 @@
 			"license": "MIT",
 			"dependencies": {
 				"effect": "3.21.4"
+			},
+			"engines": {
+				"node": ">=22.19.0"
+			}
+		},
+		"node_modules/@piki/skills": {
+			"version": "0.80.2",
+			"resolved": "https://registry.npmjs.org/@piki/skills/-/skills-0.80.2.tgz",
+			"license": "MIT",
+			"dependencies": {
+				"@piki/event-core": "^0.80.2",
+				"ignore": "7.0.5",
+				"yaml": "2.9.0"
 			},
 			"engines": {
 				"node": ">=22.19.0"

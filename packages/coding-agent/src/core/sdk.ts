@@ -67,20 +67,26 @@ export interface CreateAgentSessionOptions {
 	 * Optional default tool suppression mode when no explicit allowlist is provided.
 	 *
 	 * - "all": start with no tools enabled
-	 * - "builtin": disable the default built-in tools (read, bash, edit, write)
+	 * - "builtin": disable the default built-in tools (read, shell, edit, write)
 	 * but keep extension/custom tools enabled
 	 */
 	noTools?: "all" | "builtin";
 	/**
 	 * Optional allowlist of tool names.
 	 *
-	 * When omitted, pi enables the default built-in tools (read, bash, edit, write)
+	 * When omitted, pi enables the default built-in tools (read, shell, edit, write)
 	 * and leaves extension/custom tools enabled unless `noTools` changes that default.
 	 * When provided, only the listed tool names are enabled.
 	 */
 	tools?: string[];
 	/** Optional denylist of tool names to disable. Applies after `tools` when both are provided. */
 	excludeTools?: string[];
+	/** When true, forbid/mass-destructive shell classification and destructive built-in rules are allowed (alpha22 --disable-shell-safeguards). */
+	disableShellSafeguards?: boolean;
+	/** When true, role-policy out-of-cwd write rules are skipped for workers (alpha22 --disable-cwd-safeguards). */
+	disableCwdSafeguards?: boolean;
+	/** Initial goal objective (alpha22 --goal). Seeds the Goal projection at session init. */
+	goal?: string;
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
 
@@ -315,7 +321,7 @@ export function streamSimpleWithApiKeyResolver(
  * await loader.reload();
  * const { session } = await createAgentSession({
  * model: myModel,
- * tools: ["read", "bash"],
+ * tools: ["read", "shell"],
  * resourceLoader: loader,
  * sessionManager: SessionManager.inMemory(),
  * });
@@ -399,7 +405,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
 
-	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
+	const defaultActiveToolNames: ToolName[] = ["read", "shell", "edit", "write"];
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;
 	const excludedToolNameSet = excludedToolNames ? new Set(excludedToolNames) : undefined;
@@ -531,6 +537,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		},
 		sessionId: sessionManager.getSessionId(),
+		cacheRetention: settingsManager.getCacheRetention(),
 		transformContext: async (messages) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner) return messages;
@@ -540,6 +547,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		followUpMode: settingsManager.getFollowUpMode(),
 		transport: settingsManager.getTransport(),
 		maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
+		toolTimeout: (toolName) => settingsManager.getToolTimeoutMs(toolName),
 	});
 
 	// Restore messages if session has existing data
@@ -568,10 +576,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		initialActiveToolNames,
 		allowedToolNames,
 		excludedToolNames,
-		permissionRules: options.permissionRules,
+		permissionRules: [...settingsManager.getPermissionRules(), ...(options.permissionRules ?? [])],
 		permissionDelegate: options.permissionDelegate,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		disableShellSafeguards: options.disableShellSafeguards,
+		disableCwdSafeguards: options.disableCwdSafeguards,
+		goal: options.goal,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

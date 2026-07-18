@@ -31,8 +31,8 @@ function addToolGuidance(options: BuildSystemPromptOptions, basePrompt: string):
 		);
 	}
 
-	if (hasTool("bash")) {
-		parts.push("• Execute commands with the `bash` tool. Use it for file operations like `ls`, `find`, `grep`.");
+	if (hasTool("shell")) {
+		parts.push("• Execute commands with the `shell` tool. Use it for file operations like `ls`, `find`, `grep`.");
 	}
 
 	if (hasTool("edit")) {

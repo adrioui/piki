@@ -15,7 +15,7 @@ import { formatSkillsForPrompt, type Skill } from "./skills.ts";
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
-	/** Tools to include in prompt. Default: [read, bash, edit, write] */
+	/** Tools to include in prompt. Default: [read, shell, edit, write] */
 	selectedTools?: string[];
 	/** Optional one-line tool snippets keyed by tool name. */
 	toolSnippets?: Record<string, string>;
@@ -51,6 +51,13 @@ export interface BuildSystemPromptOptions {
 	 * skills visible to this role are included.
 	 */
 	role?: SkillFilterRole;
+	/**
+	 * When true, the shared `appendTail` will NOT inject the `<available_skills>`
+	 * block. Used by the leader composition, which already renders the skill
+	 * reference list inside its body via `{{SKILLS_SECTION}}` (matching
+	 * Magnitude's in-body skill placement). Prevents duplicate injection.
+	 */
+	skipSkillsInTail?: boolean;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -119,8 +126,10 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			prompt += "</project_context>\n";
 		}
 
-		// Append skills section (only when requested and available)
-		if (includeSkills && skills.length > 0) {
+		// Append skills section (only when requested and available). The leader
+		// composition already renders skills inside its body, so skip the tail
+		// injection there to avoid a duplicate list.
+		if (includeSkills && skills.length > 0 && !options.skipSkillsInTail) {
 			prompt += formatSkillsForPrompt(skills, { role });
 		}
 
@@ -151,7 +160,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// Build tools list based on selected tools.
 	// A tool appears in Available tools only when the caller provides a one-line snippet.
-	const tools = selectedTools || ["read", "bash", "edit", "write"];
+	const tools = selectedTools || ["read", "shell", "edit", "write"];
 	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
 	const toolsList =
 		visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n") : "(none)";
@@ -167,7 +176,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		guidelinesList.push(guideline);
 	};
 
-	const hasBash = tools.includes("bash");
+	const hasBash = tools.includes("bash") || tools.includes("shell");
 	const hasGrep = tools.includes("grep");
 	const hasFind = tools.includes("find");
 	const hasLs = tools.includes("ls");
@@ -214,6 +223,86 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 			);
 		default:
 			return appendTail(buildDefaultPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath), hasRead);
+	}
+}
+
+/**
+ * Build only the model-lineage "family" tuning text — the tools list and
+ * variant-specific reliability/agency guidance — with NO outer context (no
+ * project context files, skills, date/cwd, or env snapshot).
+ *
+ * This is used as the *tail* of the leader system prompt: the canonical
+ * leader identity (LEADER_PROMPT) is the body, and this variant tuning is
+ * appended after it as context, matching Magnitude alpha22's composition.
+ */
+export function buildSystemPromptTail(options: BuildSystemPromptOptions): string {
+	const {
+		selectedTools,
+		toolSnippets,
+		promptGuidelines,
+		cwd,
+		promptVariant: providedVariant,
+		provider,
+		modelId,
+		modelName,
+	} = options;
+	const resolvedCwd = cwd;
+	const promptCwd = resolvedCwd.replace(/\\/g, "/");
+
+	const now = new Date();
+	const year = now.getFullYear();
+	const month = String(now.getMonth() + 1).padStart(2, "0");
+	const day = String(now.getDate()).padStart(2, "0");
+	const date = `${year}-${month}-${day}`;
+
+	const variant: PromptVariant = providedVariant ?? classifyPromptVariant(provider, modelId, modelName);
+
+	const readmePath = getReadmePath();
+	const docsPath = getDocsPath();
+	const examplesPath = getExamplesPath();
+
+	// Build tools list based on selected tools. A tool appears in the list only
+	// when the caller provides a one-line snippet.
+	const tools = selectedTools || ["read", "shell", "edit", "write"];
+	const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
+	const toolsList =
+		visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n") : "(none)";
+
+	const guidelinesList: string[] = [];
+	const guidelinesSet = new Set<string>();
+	const addGuideline = (g: string): void => {
+		if (guidelinesSet.has(g)) {
+			return;
+		}
+		guidelinesSet.add(g);
+		guidelinesList.push(g);
+	};
+	for (const g of promptGuidelines ?? []) {
+		const n = g.trim();
+		if (n.length > 0) addGuideline(n);
+	}
+	addGuideline("Be concise in your responses");
+	addGuideline("Show file paths clearly when working with files");
+	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
+
+	// Date/cwd are intentionally omitted — appendTail appends them after this
+	// tail (along with context files and skills).
+	void date;
+	void promptCwd;
+
+	switch (variant) {
+		case "kimi-explicit":
+			return buildKimiExplicitPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
+		case "openai-explicit":
+			return buildOpenAIExplicitPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
+		case "gemini-explicit":
+			return buildGeminiExplicitPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
+		case "grok-explicit":
+			return buildGrokExplicitPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
+		case "open-source-explicit":
+			return buildOpenSourceExplicitPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
+		default:
+			return buildDefaultPrompt(toolsList, guidelines, readmePath, docsPath, examplesPath);
 	}
 }
 

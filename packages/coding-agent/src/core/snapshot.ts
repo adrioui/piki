@@ -131,7 +131,12 @@ function countTrackedFiles(workspaceRoot: string): number {
  *
  * Returns the tree OID, or null if not a git repo or the git commands fail.
  */
-export function createSnapshot(workspaceRoot: string, sessionId: string, messageId: string): string | null {
+export function createSnapshot(
+	workspaceRoot: string,
+	sessionId: string,
+	messageId: string,
+	retention = DEFAULT_SNAPSHOT_RETENTION,
+): string | null {
 	if (!shouldEnableGitTracking(workspaceRoot)) {
 		return null;
 	}
@@ -199,6 +204,9 @@ export function createSnapshot(workspaceRoot: string, sessionId: string, message
 			stdio: "pipe",
 		});
 
+		// Bound retention: prune oldest refs for this session (best-effort)
+		pruneSnapshotRefs(workspaceRoot, sessionId, retention);
+
 		return treeOID;
 	} catch {
 		return null;
@@ -209,6 +217,103 @@ export function createSnapshot(workspaceRoot: string, sessionId: string, message
 		} catch {
 			// Ignore cleanup errors
 		}
+	}
+}
+
+/**
+ * Default number of snapshot refs retained per session. Older refs are pruned
+ * after each new snapshot is written. Configurable via
+ * `ExperimentalSettings.snapshotRetention`.
+ */
+export const DEFAULT_SNAPSHOT_RETENTION = 50;
+
+/**
+ * Path to the git ref directory that stores snapshots for a session:
+ * `<gitDir>/refs/piki/snapshots/<sessionId>`. Returns null if the git dir
+ * cannot be resolved. Caller must have validated `sessionId` with
+ * `isSafeRefSegment` before using this path.
+ */
+function snapshotRefsDir(workspaceRoot: string, sessionId: string): string | null {
+	try {
+		const gitDir = execFileSync("git", ["rev-parse", "--git-dir"], {
+			cwd: workspaceRoot,
+			stdio: "pipe",
+			encoding: "utf-8",
+		}).trim();
+		return resolve(workspaceRoot, gitDir, "refs", "piki", "snapshots", sessionId);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Remove all snapshot refs for a session. Best-effort and idempotent: safe to
+ * call when no refs exist (e.g. snapshots disabled) or when there is no git
+ * dir. Never throws.
+ */
+export function deleteSnapshotsForSession(workspaceRoot: string, sessionId: string): void {
+	if (!isSafeRefSegment(sessionId)) return;
+	const dir = snapshotRefsDir(workspaceRoot, sessionId);
+	if (!dir) return;
+	try {
+		if (existsSync(dir)) {
+			for (const file of readdirSync(dir)) {
+				try {
+					rmSync(join(dir, file), { force: true });
+				} catch {
+					// Ignore per-file removal errors
+				}
+			}
+			rmSync(dir, { recursive: true, force: true });
+		}
+	} catch {
+		// Ignore; deletion is best-effort
+	}
+}
+
+/**
+ * Prune snapshot refs for a session down to `keepN`, deleting the oldest refs
+ * first (mtime ascending). Keeps the newest `keepN` so `latest`/`previous`/
+ * HH:MM:SS addressing remain valid. Best-effort and idempotent.
+ */
+export function pruneSnapshotRefs(workspaceRoot: string, sessionId: string, keepN: number): void {
+	if (!isSafeRefSegment(sessionId)) return;
+	if (!Number.isFinite(keepN) || keepN < 0) return;
+	const dir = snapshotRefsDir(workspaceRoot, sessionId);
+	if (!dir) return;
+	try {
+		if (!existsSync(dir)) return;
+		const entries = readdirSync(dir)
+			.map((file) => {
+				const filePath = join(dir, file);
+				let timestamp = 0;
+				try {
+					timestamp = statSync(filePath).mtimeMs;
+				} catch {
+					timestamp = 0;
+				}
+				return { file, timestamp };
+			})
+			.sort((a, b) => a.timestamp - b.timestamp);
+
+		const excess = entries.length - keepN;
+		if (excess <= 0) return;
+
+		for (let i = 0; i < excess; i++) {
+			try {
+				rmSync(join(dir, entries[i]!.file), { force: true });
+			} catch {
+				// Ignore per-file removal errors
+			}
+		}
+
+		// Remove the now-empty namespace dir if no refs remain
+		const remaining = readdirSync(dir);
+		if (remaining.length === 0) {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	} catch {
+		// Ignore; pruning is best-effort
 	}
 }
 
@@ -336,6 +441,22 @@ export function resolveSnapshotSelector(
 		return snapshots[numeric];
 	}
 
+	// HH:MM:SS (or YYYY-MM-DD HH:MM:SS) turn-boundary addressing, matching
+	// Magnitude alpha22's checkpoint_rollback/checkpoint_changes `since` param.
+	// Resolves to the latest snapshot whose mtime is at or before that time.
+	if (isBoundaryTimestamp(value)) {
+		const target = parseBoundaryTimestamp(value);
+		if (target !== null) {
+			let candidate: (typeof snapshots)[number] | undefined;
+			for (const snapshot of snapshots) {
+				if (snapshot.timestamp <= target) {
+					candidate = snapshot;
+				}
+			}
+			return candidate ?? snapshots[0];
+		}
+	}
+
 	const date = new Date(value);
 	if (!Number.isNaN(date.getTime())) {
 		let candidate: (typeof snapshots)[number] | undefined;
@@ -348,6 +469,28 @@ export function resolveSnapshotSelector(
 	}
 
 	return snapshots.find((snapshot) => snapshot.messageId === value || snapshot.treeOID === value);
+}
+
+const BOUNDARY_TIME_RE = /^(\d{1,2}):(\d{2}):(\d{2})$/;
+const BOUNDARY_DAYTIME_RE = /^\d{4}-\d{2}-\d{2} (\d{1,2}):(\d{2}):(\d{2})$/;
+
+/** True if `value` looks like a Magnitude turn-boundary timestamp (`HH:MM:SS` or `YYYY-MM-DD HH:MM:SS`). */
+export function isBoundaryTimestamp(value: string): boolean {
+	return BOUNDARY_TIME_RE.test(value.trim()) || BOUNDARY_DAYTIME_RE.test(value.trim());
+}
+
+/** Parse a turn-boundary timestamp into epoch ms (local time). Returns null if unparseable. */
+export function parseBoundaryTimestamp(value: string): number | null {
+	const trimmed = value.trim();
+	const timeMatch = BOUNDARY_TIME_RE.exec(trimmed) ?? BOUNDARY_DAYTIME_RE.exec(trimmed);
+	if (!timeMatch) return null;
+	const hours = Number.parseInt(timeMatch[1], 10);
+	const minutes = Number.parseInt(timeMatch[2], 10);
+	const seconds = Number.parseInt(timeMatch[3], 10);
+	if (hours > 23 || minutes > 59 || seconds > 59) return null;
+	const now = new Date();
+	const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, seconds, 0);
+	return candidate.getTime();
 }
 
 /**

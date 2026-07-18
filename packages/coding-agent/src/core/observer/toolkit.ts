@@ -11,7 +11,12 @@ export interface ObserverToolkitTool {
 	name: "pass" | "escalate";
 	description: string;
 	parameters: TSchema;
-	execute: (_id: string, args: unknown) => Promise<{ content: Array<{ type: "text"; text: string }> }>;
+	execute: (_id: string, args: unknown) => Promise<ObserverToolkitResult>;
+}
+
+export interface ObserverToolkitResult {
+	content: Array<{ type: "text"; text: string }>;
+	details: ObserverVerdict;
 }
 
 function parseJustification(value: unknown): ObserverJustification {
@@ -20,9 +25,10 @@ function parseJustification(value: unknown): ObserverJustification {
 		: "difficulty";
 }
 
-function result(verdict: ObserverVerdict): { content: Array<{ type: "text"; text: string }> } {
+function result(verdict: ObserverVerdict): ObserverToolkitResult {
 	return {
 		content: [{ type: "text", text: JSON.stringify(verdict) }],
+		details: verdict,
 	};
 }
 

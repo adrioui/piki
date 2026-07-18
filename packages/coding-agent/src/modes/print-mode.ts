@@ -10,9 +10,18 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { AssistantMessage, ImageContent } from "@piki/ai";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
-import { type AtifTrajectory, exportAtifLegacy, exportAtifV17, exportAtifV17Flat } from "../core/atif.ts";
+import {
+	type AtifAlpha22Options,
+	type AtifToolDefinition,
+	type AtifTrajectory,
+	exportAtifAlpha22,
+	exportAtifLegacy,
+	exportAtifV17,
+	exportAtifV17Flat,
+	toAtifToolDefinitions,
+} from "../core/atif.ts";
 import { flushRawStdout, writeRawStdout } from "../core/output-guard.ts";
-import type { ReadonlySessionManager } from "../core/session-manager.ts";
+import type { ReadonlySessionManager, SessionEntry } from "../core/session-manager.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
 
 /**
@@ -31,23 +40,56 @@ export interface PrintModeOptions {
 	atifPath?: string;
 	/** ATIF version to export: 1 (legacy) or 1.7 (Harbor format). Default: 1.7 */
 	atifVersion?: 1 | 1.7;
-	/** ATIF schema shape: "pi" (default, Pi envelope) or "flat" (flat-schema export) */
-	atifSchema?: "pi" | "flat";
+	/**
+	 * ATIF schema shape:
+	 * - "alpha22" (default): Magnitude alpha22-compatible `schema_version:"ATIF-v1.7"` envelope
+	 * - "flat": flat-schema export (`schema_version:"ATIF-v1.7"` with Pi-derived steps)
+	 * - "pi": Pi envelope (`format:"atif"`)
+	 * - "legacy": v1 legacy envelope (`format:"atif"`, version 1)
+	 */
+	atifSchema?: "alpha22" | "flat" | "pi" | "legacy";
 }
 
+export interface ExportAtifOptions {
+	/** Active tool definitions (from `AgentSession.getAllTools()`) for `tool_definitions`. */
+	toolDefinitions?: ReadonlyArray<{ name: string; description: string; parameters?: unknown }>;
+	/** ATIF alpha22 options (agent name/version). */
+	alpha22?: AtifAlpha22Options;
+}
+
+/**
+ * Export the completed session as an ATIF trajectory.
+ *
+ * Defaults to the Magnitude alpha22-compatible `schema_version:"ATIF-v1.7"`
+ * envelope. The `"legacy"`/`"pi"` schemas preserve the previous Pi envelope
+ * (`format:"atif"`) for backward compatibility.
+ */
 export function exportAtif(
 	sessionManager: ReadonlySessionManager,
 	outputPath: string,
 	version: 1 | 1.7 = 1.7,
-	schema: "pi" | "flat" = "pi",
+	schema: "alpha22" | "flat" | "pi" | "legacy" = "alpha22",
+	options: ExportAtifOptions = {},
+	forkEntries?: Map<string, SessionEntry[]>,
 ): string {
 	const resolvedPath = resolve(outputPath);
 	mkdirSync(dirname(resolvedPath), { recursive: true });
 	const header = sessionManager.getHeader();
 	const entries = sessionManager.getEntries();
 	let trajectory: AtifTrajectory;
-	if (schema === "flat" && version === 1.7) {
-		trajectory = exportAtifV17Flat(header, entries);
+	if (schema === "alpha22") {
+		const toolDefs: AtifToolDefinition[] =
+			options.toolDefinitions !== undefined ? toAtifToolDefinitions(options.toolDefinitions as never) : [];
+		trajectory = exportAtifAlpha22(header, entries, {
+			...options.alpha22,
+			toolDefinitions: toolDefs,
+			forkEntries,
+		});
+	} else if (schema === "flat" && version === 1.7) {
+		trajectory = exportAtifV17Flat(header, entries, {
+			toolDefinitions:
+				options.toolDefinitions !== undefined ? toAtifToolDefinitions(options.toolDefinitions as never) : undefined,
+		});
 	} else if (version === 1.7) {
 		trajectory = exportAtifV17(header, entries);
 	} else {
@@ -77,7 +119,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	const registerSignalHandlers = (): void => {
-		const signals: NodeJS.Signals[] = ["SIGTERM"];
+		const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
 		}
@@ -86,7 +128,7 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			const handler = () => {
 				killTrackedDetachedChildren();
 				void disposeRuntime().finally(() => {
-					process.exit(signal === "SIGHUP" ? 129 : 143);
+					process.exit(signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143);
 				});
 			};
 			process.on(signal, handler);
@@ -95,6 +137,23 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 	};
 
 	registerSignalHandlers();
+
+	// G1 (piki↔mag alpha22 parity, LOW): register process-lifecycle handlers
+	// mag installs on the headless/RPC path so a stray rejection or idle drain
+	// triggers graceful cleanup (killTrackedDetachedChildren) rather than an
+	// unhandled crash. Additive; signal exit codes are unchanged (documented).
+	const onUnhandledRejection = (reason: unknown): void => {
+		console.error("Unhandled rejection in print mode:", reason instanceof Error ? reason.message : String(reason));
+		killTrackedDetachedChildren();
+		void disposeRuntime().finally(() => process.exit(1));
+	};
+	process.on("unhandledRejection", onUnhandledRejection);
+	signalCleanupHandlers.push(() => process.off("unhandledRejection", onUnhandledRejection));
+	const onBeforeExit = (): void => {
+		killTrackedDetachedChildren();
+	};
+	process.on("beforeExit", onBeforeExit);
+	signalCleanupHandlers.push(() => process.off("beforeExit", onBeforeExit));
 
 	runtimeHost.setRebindSession(async () => {
 		await rebindSession();
@@ -178,7 +237,25 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 		}
 
 		if (atifPath) {
-			exportAtif(session.sessionManager, atifPath, options.atifVersion, options.atifSchema);
+			const allTools = typeof session.getAllTools === "function" ? session.getAllTools() : [];
+			const toolDefinitions = allTools.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				parameters: tool.parameters,
+			}));
+			const forkEntries = typeof session.getForkEntries === "function" ? session.getForkEntries() : undefined;
+			const forkMeta = typeof session.getForkMeta === "function" ? session.getForkMeta() : undefined;
+			exportAtif(
+				session.sessionManager,
+				atifPath,
+				options.atifVersion,
+				options.atifSchema,
+				{
+					toolDefinitions,
+					alpha22: forkMeta ? { forkMeta } : undefined,
+				},
+				forkEntries,
+			);
 		}
 
 		return exitCode;

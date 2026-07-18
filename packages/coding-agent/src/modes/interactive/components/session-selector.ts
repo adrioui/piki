@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, rmSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import * as os from "node:os";
 import {
@@ -15,6 +15,8 @@ import {
 } from "@piki/tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
 import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
+import { sidecarPathForSessionFile } from "../../../core/session-manager.ts";
+import { deleteSnapshotsForSession } from "../../../core/snapshot.ts";
 import { canonicalizePath as _canonicalizePath } from "../../../utils/paths.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
@@ -640,11 +642,68 @@ class SessionList implements Component, Focusable {
 type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
 
 /**
- * Delete a session file, trying the `trash` CLI first, then falling back to unlink
+ * Sidecar suffixes written by `SessionManager` for each session JSONL.
+ */
+const SESSION_SIDECAR_SUFFIXES = [".meta.json", ".projections.json", ".events.jsonl", ".runtime-meta.json"];
+
+/**
+ * Read the session id from the first JSON line of a session `.jsonl` file.
+ * Returns undefined if the header cannot be read or parsed.
+ */
+function readSessionIdFromJsonl(sessionPath: string): string | undefined {
+	try {
+		const fd = openSync(sessionPath, "r");
+		try {
+			const buffer = Buffer.alloc(512);
+			const bytesRead = readSync(fd, buffer, 0, 512, 0);
+			const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+			if (!firstLine) return undefined;
+			const header = JSON.parse(firstLine) as Record<string, unknown>;
+			if (header.type === "session" && typeof header.id === "string") {
+				return header.id;
+			}
+			return undefined;
+		} finally {
+			closeSync(fd);
+		}
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Delete a session file, trying the `trash` CLI first, then falling back to unlink.
+ *
+ * Also removes session sidecars (.meta.json, .projections.json, .events.jsonl)
+ * and any git snapshot refs under refs/piki/snapshots/<sessionId>/. Sidecars and
+ * refs are derived caches; they are removed before the authoritative `.jsonl`
+ * so a crash between steps at most leaves a harmless orphaned cache, never a
+ * missing source with dangling refs. Each removal failure is non-fatal.
  */
 async function deleteSessionFile(
 	sessionPath: string,
+	cwd?: string,
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
+	// Best-effort: clean derived caches (sidecars + snapshot refs) first.
+	const sessionId = readSessionIdFromJsonl(sessionPath);
+	if (cwd && sessionId) {
+		try {
+			deleteSnapshotsForSession(cwd, sessionId);
+		} catch {
+			// Non-fatal: ref pruning is best-effort.
+		}
+	}
+	for (const suffix of SESSION_SIDECAR_SUFFIXES) {
+		const sidecarPath = sidecarPathForSessionFile(sessionPath, suffix);
+		try {
+			if (existsSync(sidecarPath)) {
+				rmSync(sidecarPath, { force: true });
+			}
+		} catch {
+			// Non-fatal: a single sidecar removal failure must not abort deletion.
+		}
+	}
+
 	// Try `trash` first (if installed)
 	const trashArgs = sessionPath.startsWith("-") ? ["--", sessionPath] : [sessionPath];
 	const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
@@ -830,7 +889,9 @@ export class SessionSelectorComponent extends Container implements Focusable {
 
 		// Handle session deletion
 		this.sessionList.onDeleteSession = async (sessionPath: string) => {
-			const result = await deleteSessionFile(sessionPath);
+			const targetSessions = this.scope === "all" ? (this.allSessions ?? []) : (this.currentSessions ?? []);
+			const session = targetSessions.find((s) => s.path === sessionPath);
+			const result = await deleteSessionFile(sessionPath, session?.cwd ?? process.cwd());
 
 			if (result.ok) {
 				if (this.currentSessions) {

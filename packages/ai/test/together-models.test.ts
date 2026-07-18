@@ -56,7 +56,8 @@ describe("Together models", () => {
 			low: null,
 			medium: null,
 			high: "high",
-			xhigh: null,
+			xhigh: "xhigh",
+			max: null,
 		});
 		expect(deepSeekV4.compat).toMatchObject({
 			supportsReasoningEffort: true,

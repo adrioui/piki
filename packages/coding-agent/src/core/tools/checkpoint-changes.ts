@@ -11,12 +11,10 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { diffSnapshotAgainstWorktree, resolveSnapshotSelector } from "../snapshot.ts";
 
 const checkpointChangesSchema = Type.Object({
-	since: Type.Optional(
-		Type.String({
-			description:
-				"Snapshot selector to compare against. Supports latest, previous, numeric index, timestamp, message ID, or tree OID. Defaults to latest.",
-		}),
-	),
+	since: Type.String({
+		description:
+			"Snapshot selector to compare against (required). Supports latest, previous, numeric index, timestamp, message ID, or tree OID.",
+	}),
 	glob: Type.Optional(
 		Type.String({
 			description: "Optional glob pattern to restrict the diff to matching files (e.g. '*.ts', 'src/**').",

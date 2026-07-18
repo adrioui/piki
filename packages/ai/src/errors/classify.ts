@@ -85,8 +85,15 @@ function providerErrorRetryable(
 	status: number,
 ): boolean {
 	const text = providerErrorText(error);
-	if (status === 429 || status >= 500) return !hasPattern(text, CONTEXT_LIMIT_PATTERNS);
-	return hasPattern(text, TRANSIENT_PROVIDER_PATTERNS);
+	// Only 429 and 5xx responses are retryable. Transient-pattern matching is
+	// intentionally NOT applied to 4xx responses (e.g. 409) — matching
+	// Magnitude's behavior, where any 4xx except 429 is a non-retryable
+	// invalid_request. Connection/operational failures are retried separately
+	// via the StreamOperationalFailure path.
+	if (status === 429 || status >= 500) {
+		return !hasPattern(text, CONTEXT_LIMIT_PATTERNS);
+	}
+	return false;
 }
 
 export function defaultProviderRejection(

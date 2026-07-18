@@ -11,6 +11,25 @@ import { createSyntheticSourceInfo } from "../../src/core/source-info.ts";
 import { createTestResourceLoader } from "../utilities.ts";
 import { createHarness, getMessageText, type Harness } from "./harness.ts";
 
+// convertToLlm (WIP) injects `--- HH:MM:SS ---` turn-boundary separator user
+// messages ahead of each turn-starting user message. These are model-facing
+// markers, not real content. Skip them when extracting the actual user text.
+const TURN_BOUNDARY_RE = /^--- \d{1,2}:\d{2}:\d{2} ---$/;
+function isTurnBoundaryMessage(message: {
+	role: string;
+	content: string | Array<{ type: string; text?: string }>;
+}): boolean {
+	if (message.role !== "user") return false;
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: message.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text ?? "")
+					.join("\n");
+	return TURN_BOUNDARY_RE.test(text);
+}
+
 describe("AgentSession prompt characterization", () => {
 	const harnesses: Harness[] = [];
 	const tempDirs: string[] = [];
@@ -152,7 +171,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find((message) => message.role === "user" && !isTurnBoundaryMessage(message));
 				sawImage =
 					user?.role === "user" &&
 					typeof user.content !== "string" &&
@@ -210,7 +229,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find((message) => message.role === "user" && !isTurnBoundaryMessage(message));
 				expandedPrompt = user ? getMessageText(user) : "";
 				return fauxAssistantMessage("ok");
 			},
@@ -245,7 +264,7 @@ describe("AgentSession prompt characterization", () => {
 
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find((message) => message.role === "user" && !isTurnBoundaryMessage(message));
 				expandedPrompt = user ? getMessageText(user) : "";
 				return fauxAssistantMessage("ok");
 			},

@@ -119,7 +119,7 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	return { shell: "sh", args: ["-c"] };
 }
 
-export function getShellEnv(cwd?: string): NodeJS.ProcessEnv {
+export function getShellEnv(cwd?: string, scratchpadPath?: string): NodeJS.ProcessEnv {
 	const binDir = getBinDir();
 	const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
 	const currentPath = process.env[pathKey] ?? "";
@@ -132,7 +132,13 @@ export function getShellEnv(cwd?: string): NodeJS.ProcessEnv {
 		[pathKey]: updatedPath,
 		NO_COLOR: "1",
 		PROJECT_ROOT: cwd ?? process.cwd(),
-		M: process.env.PIKI_SCRATCHPAD_DIR ?? "",
+		// Mag's agentEnv(cwd, scratchpadPath) sets M unconditionally from the
+		// session scratchpad path. Mirror that so a caller that omits scratchpadPath
+		// still resolves the scratchpad env instead of silently falling back to "".
+		// Fall back to the piki `M` env var, then mag's `MAGNITUDE_SCRATCHPAD_PATH`,
+		// so a session-injected scratchpadPath always wins but an outer `M` still
+		// resolves when no scratchpad path is supplied.
+		M: scratchpadPath ?? process.env.M ?? process.env.MAGNITUDE_SCRATCHPAD_PATH ?? "",
 	};
 }
 
@@ -182,6 +188,24 @@ export function sanitizeBinaryOutput(str: string): string {
  */
 const trackedDetachedChildPids = new Set<number>();
 
+/**
+ * Tracks the SIGKILL fallback timers armed by killProcessTree, keyed by PID.
+ * This prevents the 2000ms setTimeout from leaking or keeping the event loop
+ * alive after a process is gone. Mirrors mag's per-PID kill-timer tracking.
+ */
+const killTimersByPid = new Map<number, ReturnType<typeof setTimeout>>();
+
+/**
+ * Clear the SIGKILL fallback timer for a PID (if any). Safe to call when no
+ * timer is registered for the PID.
+ */
+export function clearKillTimer(pid: number): void {
+	const timer = killTimersByPid.get(pid);
+	if (timer === undefined) return;
+	clearTimeout(timer);
+	killTimersByPid.delete(pid);
+}
+
 // Lazy import to avoid circular dependency — loaded on first use
 let _registerDetached: ((pid: number, outputPath?: string) => void) | undefined;
 let _unregisterDetached: ((pid: number) => void) | undefined;
@@ -230,16 +254,32 @@ export function killProcessTree(pid: number): void {
 			// Ignore errors if taskkill fails
 		}
 	} else {
-		// Use SIGKILL on Unix/Linux/Mac
+		// Send SIGTERM first to allow graceful shutdown/flush, mirroring mag's
+		// performKill (SIGTERM to descendants + child, then a SIGKILL fallback).
 		try {
-			process.kill(-pid, "SIGKILL");
+			process.kill(-pid, "SIGTERM");
 		} catch {
-			// Fallback to killing just the child if process group kill fails
+			// Fallback to signaling just the child if process group kill fails
 			try {
-				process.kill(pid, "SIGKILL");
+				process.kill(pid, "SIGTERM");
 			} catch {
 				// Process already dead
 			}
 		}
+		// Arm a SIGKILL fallback after a grace period (2000ms, matching mag).
+		clearKillTimer(pid);
+		const timer = setTimeout(() => {
+			killTimersByPid.delete(pid);
+			try {
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				try {
+					process.kill(pid, "SIGKILL");
+				} catch {
+					// Process already gone
+				}
+			}
+		}, 2000);
+		killTimersByPid.set(pid, timer);
 	}
 }

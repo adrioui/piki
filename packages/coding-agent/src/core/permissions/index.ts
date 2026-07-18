@@ -18,6 +18,7 @@ export {
 	GUARDED_PATH_PATTERNS,
 	type GuardedPathMatch,
 	isGuardedPath,
+	MUTATING_TOOLS,
 } from "./guarded-paths.ts";
 export {
 	evaluatePermission,
@@ -29,8 +30,15 @@ export {
 export { getRolePolicyRules } from "./role-policy.ts";
 export {
 	classifyShellCommand,
+	expandAndResolve,
+	expandEnvVars,
+	isPathWithin,
 	parseShellCommand,
 	type ShellClassification,
 	type ShellCommandSegment,
+	type ShellRedirect,
 	type ShellSafetyLevel,
+	WRITE_PATH_COMMANDS,
+	writesStayWithin,
+	writesStayWithinStrict,
 } from "./shell-classifier.ts";

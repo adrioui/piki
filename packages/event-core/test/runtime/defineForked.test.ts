@@ -1,8 +1,15 @@
 // packages/event-core/test/runtime/defineForked.test.ts
 // Tests for defineForked — per-fork fiber lifecycle management.
 
-import { Context, Effect, type Layer } from "effect";
+import { Context, Effect, Layer, PubSub } from "effect";
 import { describe, expect, it } from "vitest";
+import { makeEventBusCoreLayer } from "../../src/core/event-bus-core.ts";
+import { makeEventSinkLayer } from "../../src/core/event-sink.ts";
+import { FrameworkErrorPubSubLive, FrameworkErrorReporterLive } from "../../src/core/framework-error.ts";
+import { HydrationContextLive } from "../../src/core/hydration-context.ts";
+import { InterruptCoordinatorLive } from "../../src/core/interrupt-coordinator.ts";
+import { makeProjectionBusLayer } from "../../src/core/projection-bus.ts";
+import { makeWorkerBusLayer } from "../../src/core/worker-bus.ts";
 import type { EventEnvelope, Signal } from "../../src/types.ts";
 import { defineForked } from "../../src/worker/defineForked.ts";
 
@@ -30,9 +37,35 @@ function makeSignal(type: string, payload: Record<string, unknown> = {}): Signal
 	return { type, payload };
 }
 
-/** Run an Effect with a provided layer, casting away remaining requirements. */
-function runWithLayer<A>(effect: Effect.Effect<A, any, any>, layer: Layer.Layer<any, any, any>): Promise<A> {
-	return Effect.runPromise(effect.pipe(Effect.provide(layer)) as Effect.Effect<A, never, never>);
+/** Build the full engine runtime layer (mirrors make.ts BaseLayer) that the
+ *  worker's Layer requires: Hydration, Sink, InterruptCoordinator, FrameworkError,
+ *  ProjectionBus, EventBusCore and WorkerBus. */
+function makeRuntimeLayer(): Layer.Layer<any, any, any> {
+	const frameworkErrorReporterLive = FrameworkErrorReporterLive.pipe(Layer.provideMerge(FrameworkErrorPubSubLive));
+	const coreDeps = Layer.mergeAll(
+		HydrationContextLive,
+		makeEventSinkLayer(),
+		InterruptCoordinatorLive,
+		FrameworkErrorPubSubLive,
+		frameworkErrorReporterLive,
+	);
+	const withProjectionBus = Layer.provideMerge(makeProjectionBusLayer(), coreDeps);
+	const withEventBusCore = Layer.provideMerge(makeEventBusCoreLayer(), withProjectionBus);
+	return Layer.provideMerge(makeWorkerBusLayer(), withEventBusCore);
+}
+
+/** Run an Effect with the worker layer composed over the full runtime stack,
+ *  plus any extra layers (e.g. signal PubSub tags) the worker requires.
+ *  Wrapped in Effect.scoped so service methods that fork scoped fibers
+ *  (defineForked spawns fork fibers inside processEvent) have a Scope. */
+function runWithLayer<A>(
+	effect: Effect.Effect<A, any, any>,
+	layer: Layer.Layer<any, any, any>,
+	extraLayers: ReadonlyArray<Layer.Layer<any, any, any>> = [],
+): Promise<A> {
+	const runtime = extraLayers.reduce((acc, l) => Layer.mergeAll(acc, l), makeRuntimeLayer());
+	const combined = Layer.provideMerge(layer, runtime);
+	return Effect.runPromise(Effect.scoped(effect).pipe(Effect.provide(combined)) as Effect.Effect<A, never, never>);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,19 +152,20 @@ describe("defineForked", () => {
 	it("G8-T3 — signal handlers resolve correct forkId", async () => {
 		const signalCalls: Array<{ signal: string; payload: unknown }> = [];
 
-		const { Tag, Layer } = defineForked({
+		const TaskGraphTag = Context.GenericTag<unknown>("TaskGraph/taskCreated");
+		const TaskGraphLayer = Layer.scoped(TaskGraphTag, PubSub.unbounded<unknown>());
+
+		const { Tag, Layer: ForkLayer } = defineForked({
 			name: "SignalWorker",
 			forkLifecycle: {
 				activateOn: "agent_created",
 				completeOn: "agent_finished",
 			},
 			signalHandlers: (on) => [
-				on(
-					{ name: "TaskGraph/taskCreated", tag: Context.GenericTag<unknown>("TaskGraph/taskCreated") },
-					(value, _publish, _read) =>
-						Effect.sync(() => {
-							signalCalls.push({ signal: "TaskGraph/taskCreated", payload: value });
-						}),
+				on({ name: "TaskGraph/taskCreated", tag: TaskGraphTag }, (value, _publish, _read) =>
+					Effect.sync(() => {
+						signalCalls.push({ signal: "TaskGraph/taskCreated", payload: value });
+					}),
 				),
 			],
 		});
@@ -143,6 +177,9 @@ describe("defineForked", () => {
 				// Send a signal with a forkId
 				yield* worker.processSignal(makeSignal("TaskGraph/taskCreated", { forkId: "fork-7", taskId: "t1" }));
 
+				// Give the forked signal handler a tick to process the published value
+				yield* Effect.sleep("10 millis");
+
 				expect(signalCalls).toHaveLength(1);
 				expect(signalCalls[0].signal).toBe("TaskGraph/taskCreated");
 				expect((signalCalls[0].payload as Record<string, unknown>).forkId).toBe("fork-7");
@@ -150,9 +187,12 @@ describe("defineForked", () => {
 				// Send a signal without forkId — goes to __main__
 				yield* worker.processSignal(makeSignal("TaskGraph/taskCreated", { taskId: "t2" }));
 
+				yield* Effect.sleep("10 millis");
+
 				expect(signalCalls).toHaveLength(2);
 			}),
-			Layer,
+			ForkLayer,
+			[TaskGraphLayer],
 		);
 	});
 

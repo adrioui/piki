@@ -5,6 +5,25 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createHarness, getAssistantTexts, getMessageText, getUserTexts, type Harness } from "./harness.ts";
 
+// convertToLlm (WIP) injects `--- HH:MM:SS ---` turn-boundary separator user
+// messages ahead of each turn-starting user message. These are model-facing
+// markers, not real content. Skip them when extracting the actual user text.
+const TURN_BOUNDARY_RE = /^--- \d{1,2}:\d{2}:\d{2} ---$/;
+function isTurnBoundaryMessage(message: {
+	role: string;
+	content: string | Array<{ type: string; text?: string }>;
+}): boolean {
+	if (message.role !== "user") return false;
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: message.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text ?? "")
+					.join("\n");
+	return TURN_BOUNDARY_RE.test(text);
+}
+
 async function createWaitingHarness(
 	options: {
 		tools?: AgentTool[];
@@ -214,7 +233,7 @@ describe("AgentSession queue characterization", () => {
 			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
 			(context) => {
 				batchedUserMessages = context.messages
-					.filter((message) => message.role === "user")
+					.filter((message) => message.role === "user" && !isTurnBoundaryMessage(message))
 					.map((message) => getMessageText(message));
 				return fauxAssistantMessage("batched steer response");
 			},
@@ -242,7 +261,7 @@ describe("AgentSession queue characterization", () => {
 			fauxAssistantMessage("original turn complete"),
 			(context) => {
 				batchedUserMessages = context.messages
-					.filter((message) => message.role === "user")
+					.filter((message) => message.role === "user" && !isTurnBoundaryMessage(message))
 					.map((message) => getMessageText(message));
 				return fauxAssistantMessage("batched follow-up response");
 			},

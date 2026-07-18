@@ -1,18 +1,31 @@
 import type { ThinkingLevel } from "@piki/agent-core";
-import type { Transport } from "@piki/ai";
+import { DEFAULT_TOOL_TIMEOUT_MS, TOOL_TIMEOUT_BY_NAME } from "@piki/agent-core";
+import type { CacheRetention, Transport } from "@piki/ai";
+import { KEEP_MESSAGE_RATIO, OUTPUT_TOKEN_RESERVE } from "@piki/event-core";
 import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { atomicWriteSync, stringifyValidated } from "../utils/atomic-write.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+import type { PermissionRule } from "./permissions/permission-gate.ts";
+import { DEFAULT_SNAPSHOT_RETENTION } from "./snapshot.ts";
+
+/** Default cap on the number of leader turns per session run. */
+export const DEFAULT_LEADER_MAX_TURNS = 100;
+
+/** Default cap on worker agent turns per spawn. */
+export const DEFAULT_WORKER_MAX_TURNS = 30;
+
 import { type AgentMode, isAgentMode } from "./modes.ts";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
-	reserveTokens?: number; // default: 16384
-	keepRecentTokens?: number; // default: 20000
+	reserveTokens?: number; // default: OUTPUT_TOKEN_RESERVE (8192)
+	keepRecentTokens?: number; // default: derived (keepRatio * softCap)
+	keepRatio?: number; // default: 0.1 (fraction of softCap retained as recent context)
 	continuationCharThreshold?: number; // default: 100000
 }
 
@@ -51,7 +64,8 @@ export interface MarkdownSettings {
 }
 
 export interface ExperimentalSettings {
-	autoSnapshot?: boolean; // default: false
+	autoSnapshot?: boolean; // default: true (always-on checkpoint system, alpha22 parity)
+	snapshotRetention?: number; // default: 50 (max git refs kept per session; older ones pruned)
 }
 
 export interface WarningSettings {
@@ -94,6 +108,7 @@ export interface Settings {
 	retry?: RetrySettings;
 	hideThinkingBlock?: boolean;
 	showCacheMissNotices?: boolean; // default: false - show transcript notices for significant prompt-cache misses
+	cacheRetention?: CacheRetention; // default: "long" (downgraded per-model by providers)
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
 	quietStartup?: boolean;
@@ -134,10 +149,15 @@ export interface Settings {
 	autoLearnTaste?: boolean;
 	tasteOnboardingEntryId?: string;
 	featureModels?: Record<string, string>;
+	roleModels?: Record<string, string>; // runtime per-role model overrides (survive reload)
+	leaderMaxTurns?: number; // cap on leader turns per session run (survives reload)
+	workerMaxTurns?: number; // cap on worker turns per spawn (survives reload)
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
+	toolTimeouts?: Record<string, number>; // Per-tool execution timeout overrides in milliseconds
+	permissionRules?: PermissionRule[]; // User-declared tool allow/deny rules (survive reload)
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -182,7 +202,7 @@ function parseTimeoutSetting(value: unknown, settingName: string): number | unde
 	return undefined;
 }
 
-export type SettingsScope = "global" | "project";
+export type SettingsScope = "global" | "project" | "local";
 
 export interface SettingsManagerCreateOptions {
 	projectTrusted?: boolean;
@@ -200,12 +220,14 @@ export interface SettingsError {
 export class FileSettingsStorage implements SettingsStorage {
 	private globalSettingsPath: string;
 	private projectSettingsPath: string;
+	private localSettingsPath: string;
 
 	constructor(cwd: string, agentDir: string) {
 		const resolvedCwd = resolvePath(cwd);
 		const resolvedAgentDir = resolvePath(agentDir);
 		this.globalSettingsPath = join(resolvedAgentDir, "settings.json");
 		this.projectSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.json");
+		this.localSettingsPath = join(resolvedCwd, CONFIG_DIR_NAME, "settings.local.json");
 	}
 
 	private acquireLockSyncWithRetry(path: string): () => void {
@@ -236,7 +258,12 @@ export class FileSettingsStorage implements SettingsStorage {
 	}
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-		const path = scope === "global" ? this.globalSettingsPath : this.projectSettingsPath;
+		const path =
+			scope === "global"
+				? this.globalSettingsPath
+				: scope === "local"
+					? this.localSettingsPath
+					: this.projectSettingsPath;
 		const dir = dirname(path);
 
 		let release: (() => void) | undefined;
@@ -256,7 +283,7 @@ export class FileSettingsStorage implements SettingsStorage {
 				if (!release) {
 					release = this.acquireLockSyncWithRetry(path);
 				}
-				writeFileSync(path, next, "utf-8");
+				atomicWriteSync(path, next);
 			}
 		} finally {
 			if (release) {
@@ -269,13 +296,16 @@ export class FileSettingsStorage implements SettingsStorage {
 export class InMemorySettingsStorage implements SettingsStorage {
 	private global: string | undefined;
 	private project: string | undefined;
+	private local: string | undefined;
 
 	withLock(scope: SettingsScope, fn: (current: string | undefined) => string | undefined): void {
-		const current = scope === "global" ? this.global : this.project;
+		const current = scope === "global" ? this.global : scope === "local" ? this.local : this.project;
 		const next = fn(current);
 		if (next !== undefined) {
 			if (scope === "global") {
 				this.global = next;
+			} else if (scope === "local") {
+				this.local = next;
 			} else {
 				this.project = next;
 			}
@@ -287,6 +317,7 @@ export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
 	private projectSettings: Settings;
+	private localSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
 	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
@@ -302,6 +333,7 @@ export class SettingsManager {
 		storage: SettingsStorage,
 		initialGlobal: Settings,
 		initialProject: Settings,
+		initialLocal: Settings,
 		globalLoadError: Error | null = null,
 		projectLoadError: Error | null = null,
 		initialErrors: SettingsError[] = [],
@@ -310,11 +342,15 @@ export class SettingsManager {
 		this.storage = storage;
 		this.globalSettings = initialGlobal;
 		this.projectSettings = initialProject;
+		this.localSettings = initialLocal;
 		this.projectTrusted = projectTrusted;
 		this.globalSettingsLoadError = globalLoadError;
 		this.projectSettingsLoadError = projectLoadError;
 		this.errors = [...initialErrors];
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = deepMergeSettings(
+			deepMergeSettings(this.globalSettings, this.projectSettings),
+			this.localSettings,
+		);
 	}
 
 	/** Create a SettingsManager that loads from files */
@@ -332,6 +368,7 @@ export class SettingsManager {
 		const projectTrusted = options.projectTrusted ?? true;
 		const globalLoad = SettingsManager.tryLoadFromStorage(storage, "global");
 		const projectLoad = SettingsManager.tryLoadFromStorage(storage, "project", projectTrusted);
+		const localLoad = SettingsManager.tryLoadFromStorage(storage, "local");
 		const initialErrors: SettingsError[] = [];
 		if (globalLoad.error) {
 			initialErrors.push({ scope: "global", error: globalLoad.error });
@@ -339,11 +376,15 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			initialErrors.push({ scope: "project", error: projectLoad.error });
 		}
+		if (localLoad.error) {
+			initialErrors.push({ scope: "local", error: localLoad.error });
+		}
 
 		return new SettingsManager(
 			storage,
 			globalLoad.settings,
 			projectLoad.settings,
+			localLoad.settings,
 			globalLoad.error,
 			projectLoad.error,
 			initialErrors,
@@ -475,7 +516,10 @@ export class SettingsManager {
 		if (!trusted) {
 			this.projectSettings = {};
 			this.projectSettingsLoadError = null;
-			this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+			this.settings = deepMergeSettings(
+				deepMergeSettings(this.globalSettings, this.projectSettings),
+				this.localSettings,
+			);
 			return;
 		}
 
@@ -485,7 +529,10 @@ export class SettingsManager {
 		if (projectLoad.error) {
 			this.recordError("project", projectLoad.error);
 		}
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = deepMergeSettings(
+			deepMergeSettings(this.globalSettings, this.projectSettings),
+			this.localSettings,
+		);
 	}
 
 	async reload(): Promise<void> {
@@ -513,7 +560,16 @@ export class SettingsManager {
 			this.recordError("project", projectLoad.error);
 		}
 
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		const localLoad = SettingsManager.tryLoadFromStorage(this.storage, "local");
+		if (!localLoad.error) {
+			this.localSettings = localLoad.settings;
+			this.recordError("local", localLoad.error);
+		}
+
+		this.settings = deepMergeSettings(
+			deepMergeSettings(this.globalSettings, this.projectSettings),
+			this.localSettings,
+		);
 	}
 
 	/** Apply additional overrides on top of current settings */
@@ -614,12 +670,15 @@ export class SettingsManager {
 				}
 			}
 
-			return JSON.stringify(mergedSettings, null, 2);
+			return stringifyValidated(mergedSettings);
 		});
 	}
 
 	private save(): void {
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = deepMergeSettings(
+			deepMergeSettings(this.globalSettings, this.projectSettings),
+			this.localSettings,
+		);
 
 		if (this.globalSettingsLoadError) {
 			return;
@@ -637,7 +696,10 @@ export class SettingsManager {
 	private saveProjectSettings(settings: Settings): void {
 		this.assertProjectTrustedForWrite();
 		this.projectSettings = structuredClone(settings);
-		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
+		this.settings = deepMergeSettings(
+			deepMergeSettings(this.globalSettings, this.projectSettings),
+			this.localSettings,
+		);
 
 		if (this.projectSettingsLoadError) {
 			return;
@@ -773,6 +835,10 @@ export class SettingsManager {
 		return this.settings.transport ?? "auto";
 	}
 
+	getCacheRetention(): CacheRetention {
+		return this.settings.cacheRetention ?? "long";
+	}
+
 	setTransport(transport: TransportSetting): void {
 		this.globalSettings.transport = transport;
 		this.markModified("transport");
@@ -793,11 +859,15 @@ export class SettingsManager {
 	}
 
 	getCompactionReserveTokens(): number {
-		return this.settings.compaction?.reserveTokens ?? 16384;
+		return this.settings.compaction?.reserveTokens ?? OUTPUT_TOKEN_RESERVE;
 	}
 
 	getCompactionKeepRecentTokens(): number {
 		return this.settings.compaction?.keepRecentTokens ?? 20000;
+	}
+
+	getCompactionKeepRatio(): number {
+		return this.settings.compaction?.keepRatio ?? KEEP_MESSAGE_RATIO;
 	}
 
 	getCompactionContinuationCharThreshold(): number {
@@ -808,12 +878,14 @@ export class SettingsManager {
 		enabled: boolean;
 		reserveTokens: number;
 		keepRecentTokens: number;
+		keepRatio: number;
 		continuationCharThreshold: number;
 	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(),
+			keepRatio: this.getCompactionKeepRatio(),
 			continuationCharThreshold: this.getCompactionContinuationCharThreshold(),
 		};
 	}
@@ -1252,7 +1324,8 @@ export class SettingsManager {
 
 	getExperimentalSettings(): ExperimentalSettings {
 		return {
-			autoSnapshot: this.settings.experimental?.autoSnapshot ?? false,
+			autoSnapshot: this.settings.experimental?.autoSnapshot ?? true,
+			snapshotRetention: this.settings.experimental?.snapshotRetention ?? DEFAULT_SNAPSHOT_RETENTION,
 		};
 	}
 
@@ -1264,5 +1337,78 @@ export class SettingsManager {
 		this.globalSettings.warnings = { ...warnings };
 		this.markModified("warnings");
 		this.save();
+	}
+
+	getRoleModels(): Record<string, string> {
+		return { ...(this.settings.roleModels ?? {}) };
+	}
+
+	setRoleModels(roleModels: Record<string, string>): void {
+		this.globalSettings.roleModels = roleModels;
+		this.markModified("roleModels");
+		this.save();
+	}
+
+	getLeaderMaxTurns(): number {
+		return this.settings.leaderMaxTurns ?? DEFAULT_LEADER_MAX_TURNS;
+	}
+
+	setLeaderMaxTurns(turns: number): void {
+		if (!Number.isInteger(turns) || turns <= 0) {
+			throw new Error(`Invalid leaderMaxTurns setting: ${String(turns)}`);
+		}
+		this.globalSettings.leaderMaxTurns = turns;
+		this.markModified("leaderMaxTurns");
+		this.save();
+	}
+
+	getWorkerMaxTurns(): number {
+		return this.settings.workerMaxTurns ?? DEFAULT_WORKER_MAX_TURNS;
+	}
+
+	setWorkerMaxTurns(turns: number): void {
+		if (!Number.isInteger(turns) || turns <= 0) {
+			throw new Error(`Invalid workerMaxTurns setting: ${String(turns)}`);
+		}
+		this.globalSettings.workerMaxTurns = turns;
+		this.markModified("workerMaxTurns");
+		this.save();
+	}
+
+	/**
+	 * Resolve the execution timeout (ms) for a tool.
+	 *
+	 * Resolution order: per-tool override (`toolTimeouts[name]`) → built-in
+	 * per-name default (`TOOL_TIMEOUT_BY_NAME`) → global default. Returns
+	 * `undefined` when no timeout should apply (caller passes an override of 0).
+	 */
+	getToolTimeoutMs(toolName: string): number | undefined {
+		const override = this.settings.toolTimeouts?.[toolName];
+		if (override !== undefined) {
+			return override > 0 ? override : undefined;
+		}
+		const nameDefault = TOOL_TIMEOUT_BY_NAME[toolName];
+		if (nameDefault !== undefined) {
+			return nameDefault;
+		}
+		return DEFAULT_TOOL_TIMEOUT_MS;
+	}
+
+	/**
+	 * Return a resolver suitable for `AgentOptions.toolTimeout` /
+	 * `AgentLoopConfig.toolTimeout`.
+	 */
+	getToolTimeoutResolver(): (toolName: string) => number | undefined {
+		return (toolName: string) => this.getToolTimeoutMs(toolName);
+	}
+
+	/**
+	 * User-declared tool allow/deny rules sourced from settings
+	 * (`permissionRules`). Empty by default. These are merged ahead of the
+	 * programmatic `CreateAgentSessionOptions.permissionRules` at session
+	 * creation, so explicitly-passed rules can override via first-match-wins.
+	 */
+	getPermissionRules(): PermissionRule[] {
+		return [...(this.settings.permissionRules ?? [])];
 	}
 }

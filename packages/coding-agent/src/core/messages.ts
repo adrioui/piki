@@ -23,6 +23,61 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
 
+// Marker injected into the model-facing conversation at each turn boundary.
+// Matches the format the LEADER_PROMPT advertises and that
+// snapshot.ts#isBoundaryTimestamp parses for checkpoint `since` addressing.
+export const TURN_BOUNDARY_PREFIX = "--- ";
+export const TURN_BOUNDARY_SUFFIX = " ---";
+
+// Pre-compiled test for an already-injected separator (idempotency guard).
+const TURN_BOUNDARY_RE = /^--- \d{1,2}:\d{2}:\d{2} ---$/;
+
+/** Format a turn-boundary separator from an epoch-ms timestamp (local HH:MM:SS). */
+export function formatTurnBoundary(timestamp: number): string {
+	const d = new Date(timestamp);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${TURN_BOUNDARY_PREFIX}${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${TURN_BOUNDARY_SUFFIX}`;
+}
+
+function messageText(msg: Message): string {
+	const c = msg.content;
+	if (typeof c === "string") return c;
+	return c.map((p) => (p.type === "text" ? p.text : "")).join("");
+}
+
+/**
+ * Inject `--- HH:MM:SS ---` turn-boundary separators into the model-facing
+ * conversation. A separator is inserted immediately before each `user` message
+ * that begins a turn (carries a timestamp) unless:
+ *   - the message is a compaction/branch summary (detected by content prefix), or
+ *   - the preceding message is already a separator (idempotency guard).
+ *
+ * Injection happens only in `convertToLlm` (throwaway per-call output), so the
+ * canonical `AgentMessage[]` stays clean and re-serialization across session
+ * reload cannot accumulate duplicate separators.
+ */
+export function injectTurnBoundarySeparators(messages: Message[]): Message[] {
+	const out: Message[] = [];
+	for (const msg of messages) {
+		if (msg.role === "user") {
+			const text = messageText(msg);
+			const isSeparator = TURN_BOUNDARY_RE.test(text);
+			const isSummary = text.startsWith(COMPACTION_SUMMARY_PREFIX) || text.startsWith(BRANCH_SUMMARY_PREFIX);
+			const prev = out[out.length - 1];
+			const prevIsSeparator = prev !== undefined && prev.role === "user" && TURN_BOUNDARY_RE.test(messageText(prev));
+			if (!isSeparator && !isSummary && msg.timestamp !== undefined && !prevIsSeparator) {
+				out.push({
+					role: "user",
+					content: [{ type: "text", text: formatTurnBoundary(msg.timestamp) }],
+					timestamp: msg.timestamp,
+				});
+			}
+		}
+		out.push(msg);
+	}
+	return out;
+}
+
 /**
  * Message type for bash executions via the ! command.
  */
@@ -149,7 +204,7 @@ export function createCustomMessage(
  * - Custom extensions and tools
  */
 export function convertToLlm(messages: AgentMessage[]): Message[] {
-	return messages
+	const result = messages
 		.map((m): Message | undefined => {
 			switch (m.role) {
 				case "bashExecution":
@@ -195,4 +250,5 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 			}
 		})
 		.filter((m) => m !== undefined);
+	return injectTurnBoundarySeparators(result);
 }

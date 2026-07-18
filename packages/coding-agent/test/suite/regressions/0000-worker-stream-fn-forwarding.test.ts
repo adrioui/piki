@@ -115,7 +115,6 @@ describe("WorkerExecutor streamFn forwarding", () => {
 		const executor = new WorkerExecutor({
 			resolveModel: () => model,
 			streamFn,
-			getSystemPrompt: () => "",
 			getAllTools: () => [],
 			getProjectContext: () => "",
 			getTranscript: () => "",
@@ -155,7 +154,6 @@ describe("WorkerExecutor streamFn forwarding", () => {
 		// No streamFn forwarded — simulates the pre-fix WorkerExecutor behavior.
 		const executor = new WorkerExecutor({
 			resolveModel: () => model,
-			getSystemPrompt: () => "",
 			getAllTools: () => [],
 			getProjectContext: () => "",
 			getTranscript: () => "",

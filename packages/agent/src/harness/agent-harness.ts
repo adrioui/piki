@@ -1,5 +1,6 @@
 import type { AssistantMessage, ImageContent, Model, Models, UserMessage } from "@piki/ai";
 import { runAgentLoop } from "../agent-loop.ts";
+import { COMPACTION_FALLBACK_KEEP_RATIO } from "../constants.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -11,9 +12,15 @@ import type {
 	ThinkingLevel,
 } from "../types.ts";
 import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.ts";
-import { compact, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./compaction/compaction.ts";
+import {
+	compact,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateContextTokens,
+	prepareCompaction,
+} from "./compaction/compaction.ts";
 import { convertToLlm } from "./messages.ts";
 import { formatPromptTemplateInvocation } from "./prompt-templates.ts";
+import { buildSessionContext } from "./session/session.ts";
 import { formatSkillInvocation } from "./skills.ts";
 import type {
 	AbortResult,
@@ -692,7 +699,7 @@ export class AgentHarness<
 			const model = this.model;
 			if (!model) throw new AgentHarnessError("invalid_state", "No model set for compaction");
 			const branchEntries = await this.session.getBranch();
-			const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS);
+			const preparationResult = prepareCompaction(branchEntries, DEFAULT_COMPACTION_SETTINGS, model.contextWindow);
 			if (!preparationResult.ok) throw preparationResult.error;
 			const preparation = preparationResult.value;
 			if (!preparation) throw new AgentHarnessError("compaction", "Nothing to compact");
@@ -707,8 +714,20 @@ export class AgentHarness<
 			const provided = hookResult?.compaction;
 			const compactResult = provided
 				? { ok: true as const, value: provided }
-				: await compact(preparation, this.models, model, customInstructions, undefined, this.thinkingLevel);
-			if (!compactResult.ok) throw compactResult.error;
+				: await compact(
+						preparation,
+						this.models,
+						model,
+						customInstructions,
+						undefined,
+						this.thinkingLevel,
+						this.env,
+					);
+			if (!compactResult.ok) {
+				// Graceful degradation: alpha22 falls back to an extractive
+				// tail-keep rather than throwing when summarization fails.
+				return await this.compactExtractiveFallback(compactResult.error);
+			}
 			const result = compactResult.value;
 			const entryId = await this.session.appendCompaction(
 				result.summary,
@@ -727,6 +746,43 @@ export class AgentHarness<
 		} finally {
 			this.phase = "idle";
 		}
+	}
+
+	/**
+	 * Extractive tail-keep fallback (alpha22 `COMPACTION_FALLBACK_KEEP_RATIO=0.25`):
+	 * when LLM summarization fails, keep the most recent ~25% of entries, replacing
+	 * discarded history with a compact note instead of throwing. Mirrors alpha22
+	 * degrading to tail-keeping rather than crashing the compaction.
+	 */
+	private async compactExtractiveFallback(error: unknown): Promise<{
+		summary: string;
+		firstKeptEntryId: string;
+		tokensBefore: number;
+		details?: unknown;
+	}> {
+		const branchEntries = await this.session.getBranch();
+		if (branchEntries.length === 0) {
+			throw normalizeHarnessError(error, "compaction");
+		}
+		const contextMessages = buildSessionContext(branchEntries).messages;
+		if (contextMessages.length === 0) {
+			throw normalizeHarnessError(error, "compaction");
+		}
+		const keepCount = Math.max(1, Math.floor(contextMessages.length * COMPACTION_FALLBACK_KEEP_RATIO));
+		const tokensBefore = estimateContextTokens(contextMessages).tokens;
+		const summary = "[Context compressed: earlier history removed via extractive tail-keep fallback]";
+		const firstKeptEntryId = branchEntries[Math.max(0, branchEntries.length - keepCount)]?.id ?? "";
+		await this.session.appendCompaction(summary, firstKeptEntryId, tokensBefore, { fallback: true }, false);
+		const lastEntry = await this.session.getBranch();
+		const appended = lastEntry.length > 0 ? lastEntry[lastEntry.length - 1] : undefined;
+		if (appended?.type === "compaction") {
+			await this.emitOwn({
+				type: "session_compact",
+				compactionEntry: appended,
+				fromHook: false,
+			});
+		}
+		return { summary, firstKeptEntryId, tokensBefore, details: { fallback: true } };
 	}
 
 	async navigateTree(

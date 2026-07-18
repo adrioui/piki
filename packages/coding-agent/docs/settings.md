@@ -4,22 +4,41 @@ Pi uses JSON settings files with project settings overriding global settings.
 
 | Location | Scope |
 |----------|-------|
-| `~/.pi/agent/settings.json` | Global (all projects) |
-| `.pi/settings.json` | Project (current directory) |
+| `~/.piki/agent/settings.json` | Global (all projects) |
+| `.piki/settings.json` | Project (current directory) |
 
 Edit directly or use `/settings` for common options.
 
 ## Project Trust
 
-On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.pi/agent/trust.json`. Trusting a project allows pi to load `.pi/settings.json` and `.pi` resources, install missing project packages, and execute project extensions.
+On interactive startup, pi asks before trusting a project folder that contains project-local settings, resources, or project `.agents/skills` and has no saved decision for the folder or a parent folder in `~/.piki/agent/trust.json`. Trusting a project allows pi to load `.piki/settings.json` and `.pi` resources, install missing project packages, and execute project extensions.
 
 Non-interactive modes (`-p`, `--mode json`, and `--mode rpc`) do not show a trust prompt. Without an applicable saved trust decision, they use `defaultProjectTrust` from global settings: `ask` (default) and `never` ignore those project resources, while `always` trusts them. Pass `--approve`/`-a` or `--no-approve`/`-na` to override project trust for one run.
 
-If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.pi/agent/settings.json`, or change it with `/settings`.
+If no extension or saved decision applies, `defaultProjectTrust` controls the fallback behavior. Set it to `"ask"`, `"always"`, or `"never"` in `~/.piki/agent/settings.json`, or change it with `/settings`.
 
 `pi config` and package commands use the same project trust flow, except `pi update` never prompts. Pass `--approve` to trust project-local settings for one command or `--no-approve` to ignore them.
 
-Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.pi/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
+Use `/trust` in interactive mode to save a project trust decision for future sessions, including trust for the immediate parent folder. It writes `~/.piki/agent/trust.json` only; the current session is not reloaded, so restart pi for changes to take effect.
+
+## Local Overrides
+
+A third settings file, `.piki/settings.local.json`, is merged on top of project and global settings with the highest precedence:
+
+```
+global (.piki/agent/settings.json) → project (.piki/settings.json) → local (.piki/settings.local.json)
+```
+
+Local overrides are project-local and meant to be hand-edited. They are typically git-ignored (they are machine- or project-specific and should not be committed). The same file backs the taste-onboarding state (`tasteOnboarding` key); pi only reads the other keys from it and never writes to it, so onboarding state is preserved.
+
+Example `.piki/settings.local.json`:
+
+```json
+{
+  "theme": "light",
+  "compaction": { "reserveTokens": 8192 }
+}
+```
 
 ## All Settings
 
@@ -195,7 +214,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 }
 ```
 
-`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.pi/agent/npm/`; project-scoped npm packages install under `.pi/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
+`npmCommand` is used for all npm package-manager operations, including installs, uninstalls, and dependency installs inside git packages. User-scoped npm packages install under `~/.piki/agent/npm/`; project-scoped npm packages install under `.piki/npm/`. Use argv-style entries exactly as the process should be launched. When `npmCommand` is configured, git package dependency installs use plain `install` to avoid npm-specific flags in wrappers or alternate package managers.
 
 ### Sessions
 
@@ -204,7 +223,7 @@ Keep `retry.provider.maxRetries` at `0` unless provider-level retries are explic
 | `sessionDir` | string | - | Directory where session files are stored. Accepts absolute or relative paths, plus `~`. |
 
 ```json
-{ "sessionDir": ".pi/sessions" }
+{ "sessionDir": ".piki/sessions" }
 ```
 
 When multiple sources specify a session directory, precedence is `--session-dir`, `PI_CODING_AGENT_SESSION_DIR`, then `sessionDir` in settings.json.
@@ -231,7 +250,7 @@ When multiple sources specify a session directory, precedence is `--session-dir`
 
 These settings define where to load extensions, skills, prompts, and themes from.
 
-Paths in `~/.pi/agent/settings.json` resolve relative to `~/.pi/agent`. Paths in `.pi/settings.json` resolve relative to `.pi`. Absolute paths and `~` are supported.
+Paths in `~/.piki/agent/settings.json` resolve relative to `~/.piki/agent`. Paths in `.piki/settings.json` resolve relative to `.pi`. Absolute paths and `~` are supported.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
@@ -270,6 +289,31 @@ Object form filters which resources to load:
 
 See [packages.md](packages.md) for package management details.
 
+## Permissions
+
+`permissionRules` lets you declare tool allow/deny rules declaratively in settings. They are evaluated before built-in policy, with first-match-wins. Programmatic rules (passed to `createAgentSession`) are appended after settings rules, so they can override via first-match-wins.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `tool` | string | Tool name pattern: exact (`"bash"`), glob (`"git:*"`), or `/regex/` |
+| `action` | string | `"allow"`, `"reject"`, `"ask"`, or `"delegate"` |
+| `matches` | object | Optional nested input field matchers (dot-separated keys, e.g. `"input.command"`) |
+| `context` | string | Optional restriction to `"thread"` or `"subagent"` |
+| `to` | string | Delegate target (for `delegate` action) |
+| `message` | string | User-facing message for `reject`/`ask` actions |
+
+Example `.piki/settings.json`:
+
+```json
+{
+  "permissionRules": [
+    { "tool": "read", "action": "allow" },
+    { "tool": "bash", "action": "ask", "matches": { "input.command": "/rm -rf */" } },
+    { "tool": "git:*", "action": "reject", "message": "Use the dedicated git tool instead." }
+  ]
+}
+```
+
 ## Example
 
 ```json
@@ -297,16 +341,16 @@ See [packages.md](packages.md) for package management details.
 
 ## Project Overrides
 
-Project settings (`.pi/settings.json`) override global settings. Nested objects are merged:
+Project settings (`.piki/settings.json`) override global settings. Nested objects are merged:
 
 ```json
-// ~/.pi/agent/settings.json (global)
+// ~/.piki/agent/settings.json (global)
 {
   "theme": "dark",
   "compaction": { "enabled": true, "reserveTokens": 16384 }
 }
 
-// .pi/settings.json (project)
+// .piki/settings.json (project)
 {
   "compaction": { "reserveTokens": 8192 }
 }

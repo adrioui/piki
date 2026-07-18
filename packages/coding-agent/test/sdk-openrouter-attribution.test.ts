@@ -275,4 +275,53 @@ describe("createAgentSession provider attribution headers", () => {
 		expect(headers?.["x-opencode-session"]).toBe("configured-session");
 		expect(headers?.["x-opencode-client"]).toBe("configured-client");
 	});
+
+	describe("settings-sourced permission rules", () => {
+		async function createSessionWithRules(settingsRules: unknown[], optionRules: unknown[] = []) {
+			const settingsManager = SettingsManager.inMemory({
+				permissionRules: settingsRules as never,
+			});
+			const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
+			const model = createModel("capture-provider", "https://example.test/v1");
+			authStorage.setRuntimeApiKey(model.provider, "test-api-key");
+			const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+			modelRegistry.registerProvider("capture-provider", {
+				api: "openai-completions",
+				streamSimple: (_model, _context) => createDoneStream(),
+			});
+			const sessionManager = SessionManager.inMemory(cwd);
+			const { session } = await createAgentSession({
+				cwd,
+				agentDir,
+				model,
+				authStorage,
+				modelRegistry,
+				settingsManager,
+				sessionManager,
+				permissionRules: optionRules as never,
+			});
+			return session;
+		}
+
+		it("threads settings permissionRules into the session", async () => {
+			const session = await createSessionWithRules([{ tool: "bash", action: "ask" }]);
+			expect(session.getUserPermissionRules()).toEqual([{ tool: "bash", action: "ask" }]);
+		});
+
+		it("appends option rules after settings rules", async () => {
+			const session = await createSessionWithRules(
+				[{ tool: "read", action: "allow" }],
+				[{ tool: "bash", action: "reject" }],
+			);
+			expect(session.getUserPermissionRules()).toEqual([
+				{ tool: "read", action: "allow" },
+				{ tool: "bash", action: "reject" },
+			]);
+		});
+
+		it("is empty when neither source provides rules", async () => {
+			const session = await createSessionWithRules([]);
+			expect(session.getUserPermissionRules()).toEqual([]);
+		});
+	});
 });

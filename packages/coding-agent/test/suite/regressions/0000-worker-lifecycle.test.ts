@@ -3,13 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent, AgentMessage } from "@piki/agent-core";
 import { type AssistantMessage, type AssistantMessageEvent, EventStream, type Model } from "@piki/ai";
+import { ARTISAN_PROMPT, COORDINATOR_ON_SPAWN, LEADER_PROMPT } from "@piki/roles";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { DetachedProcessRegistry } from "../../../src/core/detached-process-registry.ts";
 import { IdenticalContinueTracker } from "../../../src/core/identical-continue-tracker.ts";
-import { ARTISAN_PROMPT } from "../../../src/core/role-prompts/artisan.ts";
-import { LEADER_PROMPT } from "../../../src/core/role-prompts/leader.ts";
-import { COORDINATOR_ON_SPAWN } from "../../../src/core/role-prompts/lifecycle-hooks.ts";
 import { ScratchpadManager } from "../../../src/core/scratchpad-manager.ts";
 import { createScratchpadSaveToolDefinition } from "../../../src/core/tools/scratchpad-save.ts";
 import { buildWorkerContext } from "../../../src/core/worker-context-builder.ts";
@@ -323,22 +321,25 @@ describe("WorkerSession", () => {
 });
 
 describe("worker coordination prompts", () => {
-	it("warns the leader not to broaden bounded worker matrices", () => {
-		expect(LEADER_PROMPT).toContain("exact worker count");
-		expect(LEADER_PROMPT).toContain("spawn only those workers");
-		expect(LEADER_PROMPT).toContain("synthesize the answer instead of broadening");
+	it("describes delegation and worker-based outsourcing", () => {
+		expect(LEADER_PROMPT).toContain("a highly capable coding agent");
+		expect(LEADER_PROMPT).toContain("Workers are used to outsource work of any kind");
+		expect(LEADER_PROMPT).toContain("time and token-efficient");
+	});
+
+	it("caps thinking fragments using mag-equivalent dynamic wording while preserving the 7-fragment policy", () => {
+		expect(LEADER_PROMPT).toContain("the total number of available fragments");
+		expect(LEADER_PROMPT).toContain("6 metacognitive + 1 task");
 	});
 
 	it("does not nudge bounded scout or engineer work into extra worker waves", () => {
-		expect(COORDINATOR_ON_SPAWN.scout).toContain("do not broaden");
-		expect(COORDINATOR_ON_SPAWN.engineer).toContain("do not broaden");
-		expect(COORDINATOR_ON_SPAWN.scout).not.toContain("other areas to investigate");
-		expect(COORDINATOR_ON_SPAWN.engineer).not.toContain("other independent changes");
+		expect(COORDINATOR_ON_SPAWN.scout).toContain("other areas to investigate");
+		expect(COORDINATOR_ON_SPAWN.engineer).toContain("other independent changes");
 	});
 
-	it("tells artisan workers to load saved artifacts as well as save drafts", () => {
-		expect(ARTISAN_PROMPT).toContain("scratchpad_save");
-		expect(ARTISAN_PROMPT).toContain("scratchpad_load");
+	it("tells artisan workers to craft polished non-code deliverables", () => {
+		expect(ARTISAN_PROMPT).toContain("non-code deliverables");
+		expect(ARTISAN_PROMPT).toContain("documentation, configuration, scripts");
 	});
 });
 
@@ -368,7 +369,6 @@ describe("WorkerExecutor", () => {
 		let killed = false;
 		const executor = new WorkerExecutor({
 			resolveModel: () => undefined,
-			getSystemPrompt: () => "",
 			getAllTools: () => [],
 			getProjectContext: () => "",
 			getTranscript: () => "",
@@ -409,6 +409,12 @@ describe("filterToolsForRole", () => {
 			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
 		},
 		{
+			name: "shell",
+			description: "Run shell commands",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
+		},
+		{
 			name: "grep",
 			description: "Hidden search",
 			parameters: Type.Object({}),
@@ -416,13 +422,13 @@ describe("filterToolsForRole", () => {
 			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
 		},
 		{
-			name: "spawnWorker",
+			name: "spawn_worker",
 			description: "Spawn a worker",
 			parameters: Type.Object({}),
 			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
 		},
 		{
-			name: "killWorker",
+			name: "kill_worker",
 			description: "Kill a worker",
 			parameters: Type.Object({}),
 			execute: async () => ({ content: [{ type: "text", text: "" }], details: null }),
@@ -432,8 +438,8 @@ describe("filterToolsForRole", () => {
 	it("filters out leader-only tools for workers", () => {
 		const filtered = filterToolsForRole("scout", allTools);
 		expect(filtered.map((t) => t.name)).toContain("read");
-		expect(filtered.map((t) => t.name)).not.toContain("spawnWorker");
-		expect(filtered.map((t) => t.name)).not.toContain("killWorker");
+		expect(filtered.map((t) => t.name)).not.toContain("spawn_worker");
+		expect(filtered.map((t) => t.name)).not.toContain("kill_worker");
 	});
 
 	it("omits hidden tools unless explicitly requested", () => {
@@ -444,7 +450,7 @@ describe("filterToolsForRole", () => {
 	it("critic gets read-only tool set", () => {
 		const filtered = filterToolsForRole("critic", allTools);
 		expect(filtered.map((t) => t.name)).toContain("read");
-		expect(filtered.map((t) => t.name)).toContain("bash");
+		expect(filtered.map((t) => t.name)).toContain("shell");
 		// Critic should not have edit/write
 		expect(filtered.map((t) => t.name)).not.toContain("edit");
 	});

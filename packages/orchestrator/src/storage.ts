@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { getInstancesPath, getMachinePath, getOrchestratorDir } from "./config.ts";
 import type { InstanceRecord, MachineRecord } from "./types.ts";
 
@@ -9,14 +9,44 @@ function ensureOrchestratorDir(): void {
 	}
 }
 
+/**
+ * Read and parse a JSON file, guarding against corruption.
+ *
+ * On parse failure the corrupt file is backed up to `<name>.corrupt-<timestamp>`
+ * (so the bad data is preserved for inspection) and `undefined` is returned,
+ * allowing the caller to fall back to an empty/default state instead of crashing.
+ */
+function readJsonFileSafe<T>(path: string): T | undefined {
+	const data = readFileSync(path, "utf-8");
+	try {
+		return JSON.parse(data) as T;
+	} catch (err) {
+		backUpCorruptFile(path);
+		console.warn(
+			`[orchestrator] Failed to parse ${path}, using default state. Corrupt file backed up. (${
+				err instanceof Error ? err.message : String(err)
+			})`,
+		);
+		return undefined;
+	}
+}
+
+function backUpCorruptFile(path: string): void {
+	try {
+		const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+		copyFileSync(path, `${path}.corrupt-${stamp}`);
+	} catch {
+		// If the backup itself fails there's nothing actionable; swallow it.
+	}
+}
+
 export function loadMachine(): MachineRecord | undefined {
 	const machinePath = getMachinePath();
 	if (!existsSync(machinePath)) {
 		return undefined;
 	}
 
-	const data = readFileSync(machinePath, "utf-8");
-	return JSON.parse(data) as MachineRecord;
+	return readJsonFileSafe<MachineRecord>(machinePath);
 }
 
 export function saveMachine(machine: MachineRecord): void {
@@ -38,8 +68,7 @@ export function loadInstances(): InstanceRecord[] {
 		return [];
 	}
 
-	const data = readFileSync(instancesPath, "utf-8");
-	return JSON.parse(data) as InstanceRecord[];
+	return readJsonFileSafe<InstanceRecord[]>(instancesPath) ?? [];
 }
 
 export function saveInstances(instances: InstanceRecord[]): void {

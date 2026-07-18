@@ -31,7 +31,7 @@
 # The session runs in a high-entropy checkout directory so the recorded cwd is
 # a unique string. Import the session into a local checkout with the
 # /ir extension command (.pi/extensions/import-repro.ts):
-#   pi "/ir <gist-id | gist-url | pi.dev/session URL>"
+#   pi "/ir <gist-id | gist-url | piki.dev/session URL>"
 
 name: Issue Analysis
 
@@ -536,7 +536,7 @@ jobs:
             const gistId = response.data.id;
             core.setOutput('url', gistUrl);
             core.setOutput('id', gistId);
-            core.setOutput('share_url', `https://pi.dev/session/#${gistId}`);
+            core.setOutput('share_url', `https://piki.dev/session/#${gistId}`);
 
       - name: Comment with session import instructions
         if: always() && steps.gist.outcome == 'success'

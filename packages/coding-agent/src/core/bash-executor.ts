@@ -24,6 +24,8 @@ export interface BashExecutorOptions {
 	onChunk?: (chunk: string) => void;
 	/** AbortSignal for cancellation */
 	signal?: AbortSignal;
+	/** Session scratchpad root, used to set the `M` env var for spawned shells */
+	scratchpadPath?: string;
 }
 
 export interface BashResult {
@@ -115,7 +117,7 @@ export async function executeBashWithOperations(
 		const result = await operations.exec(command, cwd, {
 			onData,
 			signal: options?.signal,
-			env: { ...process.env, NO_COLOR: "1", PROJECT_ROOT: cwd, M: process.env.M ?? "" },
+			env: { ...process.env, NO_COLOR: "1", PROJECT_ROOT: cwd, M: options?.scratchpadPath ?? process.env.M ?? "" },
 		});
 
 		const fullOutput = outputChunks.join("");

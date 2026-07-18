@@ -1,8 +1,8 @@
+import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "@piki/skills";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
-import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 
 const fixturesDir = resolve(__dirname, "fixtures/skills");
@@ -447,6 +447,71 @@ describe("skills", () => {
 				includeDefaults: true,
 			});
 			expect(withTilde.length).toBe(withoutTilde.length);
+		});
+		describe("alpha22 parity — sectioned skills, thinking lenses, .magnitude roots", () => {
+			it("parses role-targeted sections from a marked SKILL.md", () => {
+				const { skills } = loadSkillsFromDir({
+					dir: join(fixturesDir, "sectioned-skill"),
+					source: "test",
+				});
+				expect(skills).toHaveLength(1);
+				const sections = skills[0].sections ?? [];
+				const names = sections.map((s) => s.name);
+				expect(names).toContain("shared");
+				expect(names).toContain("lead");
+				expect(names).toContain("worker");
+				expect(names).toContain("handoff");
+				const shared = sections.find((s) => s.name === "shared");
+				expect(shared?.content).toContain("applies to all roles");
+				const worker = sections.find((s) => s.name === "worker");
+				expect(worker?.content).toContain("Worker guidance");
+			});
+
+			it("treats an unmarked SKILL.md body as a single shared section (backward compatible)", () => {
+				const { skills } = loadSkillsFromDir({
+					dir: join(fixturesDir, "valid-skill"),
+					source: "test",
+				});
+				const sections = skills[0].sections ?? [];
+				expect(sections).toHaveLength(1);
+				expect(sections[0]?.name).toBe("shared");
+				expect(sections[0]?.content).toContain("valid skill for testing");
+			});
+
+			it("captures thinking lenses from frontmatter", () => {
+				const { skills } = loadSkillsFromDir({
+					dir: join(fixturesDir, "thinking-lens-skill"),
+					source: "test",
+				});
+				const lenses = skills[0].thinkingLenses ?? [];
+				expect(lenses).toHaveLength(1);
+				expect(lenses[0]?.lens).toBe("debug");
+				expect(lenses[0]?.trigger).toBe("test fails");
+				expect(lenses[0]?.description).toContain("reason about");
+			});
+
+			it("discovers skills from .magnitude/skills roots", () => {
+				const tmp = join(resolve(__dirname, "fixtures", "tmp-magnitude"), "project");
+				const root = join(tmp, ".magnitude", "skills");
+				const dir = join(root, "mag-skill");
+				require("node:fs").mkdirSync(dir, { recursive: true });
+				require("node:fs").writeFileSync(
+					join(dir, "SKILL.md"),
+					"---\nname: mag-skill\ndescription: Discovered from .magnitude/skills.\n---\n\nBody.\n",
+				);
+				try {
+					const { skills } = loadSkills({
+						agentDir: resolve(__dirname, "fixtures/empty-agent"),
+						cwd: tmp,
+						skillPaths: [],
+						includeDefaults: false,
+						includeClaudeCodeSkills: true,
+					});
+					expect(skills.some((s) => s.name === "mag-skill")).toBe(true);
+				} finally {
+					require("node:fs").rmSync(tmp, { recursive: true, force: true });
+				}
+			});
 		});
 	});
 

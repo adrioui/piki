@@ -5,6 +5,25 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
+// convertToLlm (WIP) injects `--- HH:MM:SS ---` turn-boundary separator user
+// messages ahead of each turn-starting user message. These are model-facing
+// markers, not real content. Skip them when extracting the actual user text.
+const TURN_BOUNDARY_RE = /^--- \d{1,2}:\d{2}:\d{2} ---$/;
+function isTurnBoundaryMessage(message: {
+	role: string;
+	content: string | Array<{ type: string; text?: string }>;
+}): boolean {
+	if (message.role !== "user") return false;
+	const text =
+		typeof message.content === "string"
+			? message.content
+			: message.content
+					.filter((part) => part.type === "text")
+					.map((part) => part.text ?? "")
+					.join("\n");
+	return TURN_BOUNDARY_RE.test(text);
+}
+
 describe("AgentSession model and extension characterization", () => {
 	const harnesses: Harness[] = [];
 
@@ -299,7 +318,7 @@ describe("AgentSession model and extension characterization", () => {
 		let providerUserText = "";
 		harness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find((message) => message.role === "user" && !isTurnBoundaryMessage(message));
 				providerUserText =
 					user && typeof user.content !== "string"
 						? user.content
@@ -340,7 +359,7 @@ describe("AgentSession model and extension characterization", () => {
 		let providerUserText = "";
 		transformedHarness.setResponses([
 			(context) => {
-				const user = context.messages.find((message) => message.role === "user");
+				const user = context.messages.find((message) => message.role === "user" && !isTurnBoundaryMessage(message));
 				providerUserText =
 					user && typeof user.content !== "string"
 						? user.content

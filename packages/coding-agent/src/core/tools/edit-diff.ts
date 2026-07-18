@@ -5,7 +5,7 @@
 import * as Diff from "diff";
 import { constants } from "fs";
 import { access, readFile } from "fs/promises";
-import { resolveToCwd } from "./path-utils.ts";
+import { resolveToolPath } from "./path-utils.ts";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
 	const crlfIdx = content.indexOf("\r\n");
@@ -254,7 +254,7 @@ function countOccurrences(content: string, old: string): number {
 	return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
+export function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
 	if (totalEdits === 1) {
 		return new Error(
 			`Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
@@ -276,14 +276,14 @@ function getDuplicateError(path: string, editIndex: number, totalEdits: number, 
 	);
 }
 
-function getEmptyOldError(path: string, editIndex: number, totalEdits: number): Error {
+export function getEmptyOldError(path: string, editIndex: number, totalEdits: number): Error {
 	if (totalEdits === 1) {
 		return new Error(`old must not be empty in ${path}.`);
 	}
 	return new Error(`edits[${editIndex}].old must not be empty in ${path}.`);
 }
 
-function getNoChangeError(path: string, totalEdits: number): Error {
+export function getNoChangeError(path: string, totalEdits: number): Error {
 	if (totalEdits === 1) {
 		return new Error(
 			`No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
@@ -362,6 +362,38 @@ export function applyEditsToNormalizedContent(
 		throw getNoChangeError(path, normalizedEdits.length);
 	}
 
+	return { baseContent, newContent };
+}
+
+/**
+ * Alpha22 flat single-edit semantics with replaceAll: replace every occurrence
+ * of `old` with `new` (split/join). Matching runs in a fuzzy-normalized view so
+ * Unicode quotes/dashes/whitespace differences do not block the match; when no
+ * fuzzy normalization was needed the result is the real normalized content.
+ */
+export function applyFlatReplaceAll(normalizedContent: string, edit: Edit, path: string): AppliedEditsResult {
+	const old = normalizeToLF(edit.old);
+	const new_ = normalizeToLF(edit.new);
+	if (old.length === 0) {
+		throw getEmptyOldError(path, 0, 1);
+	}
+
+	const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
+	const fuzzyOld = normalizeForFuzzyMatch(old);
+
+	const occurrences = fuzzyContent.split(fuzzyOld).length - 1;
+	if (occurrences === 0) {
+		throw getNotFoundError(path, 0, 1);
+	}
+
+	const fuzzyNew = normalizeForFuzzyMatch(new_);
+	const newContent = fuzzyContent.split(fuzzyOld).join(fuzzyNew);
+	if (fuzzyContent === newContent) {
+		throw getNoChangeError(path, 1);
+	}
+
+	// When no fuzzy normalization was needed, both are the real normalized content.
+	const baseContent = fuzzyContent === normalizedContent ? normalizedContent : fuzzyContent;
 	return { baseContent, newContent };
 }
 
@@ -519,8 +551,9 @@ export async function computeEditsDiff(
 	path: string,
 	edits: Edit[],
 	cwd: string,
+	scratchpadPath = "",
 ): Promise<EditDiffResult | EditDiffError> {
-	const absolutePath = resolveToCwd(path, cwd);
+	const absolutePath = resolveToolPath(path, cwd, scratchpadPath);
 
 	try {
 		// Check if file exists and is readable
@@ -556,5 +589,5 @@ export async function computeEditDiff(
 	new_: string,
 	cwd: string,
 ): Promise<EditDiffResult | EditDiffError> {
-	return computeEditsDiff(path, [{ old, new: new_ }], cwd);
+	return computeEditsDiff(path, [{ old, new: new_ }], cwd, "");
 }

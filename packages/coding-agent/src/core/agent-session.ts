@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Agent, AgentEvent, AgentMessage, AgentState, AgentTool, ThinkingLevel } from "@piki/agent-core";
 import { composePayloadHooks, createGrammarInjector, createStructuredOutputInjector } from "@piki/ai";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@piki/ai/compat";
+import type { AssistantMessage, Context, ImageContent, Message, Model, TextContent } from "@piki/ai/compat";
 import {
 	clampThinkingLevel,
 	cleanupSessionResources,
@@ -27,6 +27,17 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@piki/ai/compat";
+import {
+	CHARS_PER_TOKEN_LOWER,
+	COMPACT_MAX_FILE_CHARS,
+	COMPACT_MAX_FILES,
+	COMPACTION_FALLBACK_KEEP_RATIO,
+	COMPACTION_MAX_RETRIES,
+	OUTPUT_TOKEN_RESERVE,
+	ROLE_DEFINITIONS,
+} from "@piki/event-core";
+import { renderLeaderSystemPrompt } from "@piki/roles";
+import { formatSkillsForPrompt } from "@piki/skills";
 import { Effect } from "effect";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { handleTasteCommand } from "../taste-cli.ts";
@@ -38,10 +49,16 @@ import { decideAssistantCommit } from "./assistant-commit-policy.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
+	COMPACTION_REFLECTION_PROMPT,
+	COMPACTION_TIMEOUT_MS,
+	type CompactionDetails,
+	type CompactionPreparation,
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
+	computeContinuationCharThreshold,
+	computeSoftCap,
 	estimateContextChars,
 	estimateContextTokens,
 	estimateTokens,
@@ -82,28 +99,30 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { collectGitState, type GitState } from "./git-state.ts";
 import { IdenticalContinueTracker } from "./identical-continue-tracker.ts";
-import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { classifyError, computeJitteredDelay } from "./permissions/error-classifier.ts";
 import { checkInputForGuardedPaths } from "./permissions/guarded-paths.ts";
 import { evaluatePermission, type PermissionDecision, type PermissionRule } from "./permissions/permission-gate.ts";
+import { getRolePolicyRules } from "./permissions/role-policy.ts";
 import { classifyPromptVariant } from "./prompt-family.ts";
 import { expandPromptTemplate, type PromptTemplate, parseCommandArgs } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { SkillFilterRole } from "./role-context.ts";
-import { LEADER_PROMPT } from "./role-prompts/leader.ts";
 import type { ScratchpadManager } from "./scratchpad-manager.ts";
 import type { SessionCancellationScope } from "./session-cancellation-scope.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+import { getForkEntriesForSession, getForkMetaForSession } from "./session-orchestrator.ts";
 import { readSessionContext } from "./session-reader.ts";
 import { createSessionRuntimeServices, type SessionRuntimeServicesShape } from "./session-runtime-services.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createCheckpointId, createSnapshot, isGitRepo } from "./snapshot.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
-import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import { type BuildSystemPromptOptions, buildSystemPrompt, buildSystemPromptTail } from "./system-prompt.ts";
 import { generateSessionTitle, type TitleWorkerEvent } from "./title-worker.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createCheckpointChangesToolDefinition } from "./tools/checkpoint-changes.ts";
@@ -227,6 +246,12 @@ export interface AgentSessionConfig {
 	autoActivateAllowedTools?: boolean;
 	/** Optional denylist of tool names. When provided, these tool names are not exposed. */
 	excludedToolNames?: string[];
+	/** When true, forbid/mass-destructive shell classification and destructive built-in rules are allowed (alpha22 --disable-shell-safeguards). */
+	disableShellSafeguards?: boolean;
+	/** When true, role-policy out-of-cwd write rules are skipped for spawned workers (alpha22 --disable-cwd-safeguards). Leader is unaffected. */
+	disableCwdSafeguards?: boolean;
+	/** Initial goal objective (alpha22 --goal). Seeds the Goal projection at session init. */
+	goal?: string;
 	/** Optional permission rules evaluated before built-in policy. */
 	permissionRules?: PermissionRule[];
 	/** Optional delegate for permission rules with action="delegate". */
@@ -333,6 +358,9 @@ export class AgentSession {
 		thinkingLevel?: ThinkingLevel;
 	}>;
 
+	/** Runtime per-role model overrides (survive reload via settings.roleModels). */
+	private _roleModelOverrides: Record<string, string> = {};
+
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
@@ -370,6 +398,12 @@ export class AgentSession {
 	private _extensionRunner!: ExtensionRunner;
 	private _turnIndex = 0;
 
+	// Leader max-turns cap (per session run, survives reload via settings)
+	private _leaderMaxTurns: number;
+	private _leaderTurnCount = 0;
+	private _leaderTurnWarningSent = false;
+	private _leaderTurnsStopped = false;
+
 	private _resourceLoader: ResourceLoader;
 	private _customTools: ToolDefinition[];
 	private _baseToolDefinitions: Map<string, ToolDefinition> = new Map();
@@ -380,6 +414,9 @@ export class AgentSession {
 	private _autoActivateAllowedTools = true;
 	private _excludedToolNames?: Set<string>;
 	private _permissionRules: PermissionRule[] = [];
+	private _disableShellSafeguards = false;
+	private _disableCwdSafeguards = false;
+	private _goal?: string;
 	private _permissionDelegate?: (
 		decision: PermissionDecision,
 		toolName: string,
@@ -409,6 +446,9 @@ export class AgentSession {
 	private _baseSystemPromptOptions!: BuildSystemPromptOptions;
 	private _systemPromptOverride?: string;
 
+	// Current git state, refreshed every turn and injected into the system prompt.
+	private _gitState: GitState | undefined;
+
 	// Auto-snapshot state
 	private _snapshotEnabled = false;
 
@@ -435,8 +475,10 @@ export class AgentSession {
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
 		this._scopedModels = config.scopedModels ?? [];
-		this._resourceLoader = config.resourceLoader;
+		this._roleModelOverrides = this.settingsManager.getRoleModels();
+		this._leaderMaxTurns = this.settingsManager.getLeaderMaxTurns();
 		this._customTools = config.customTools ?? [];
+		this._resourceLoader = config.resourceLoader;
 		this._cwd = config.cwd;
 		this._modelRegistry = config.modelRegistry;
 		this._extensionRunnerRef = config.extensionRunnerRef;
@@ -445,6 +487,9 @@ export class AgentSession {
 		this._autoActivateAllowedTools = config.autoActivateAllowedTools ?? true;
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._permissionRules = config.permissionRules ?? [];
+		this._disableShellSafeguards = config.disableShellSafeguards ?? false;
+		this._disableCwdSafeguards = config.disableCwdSafeguards ?? false;
+		this._goal = config.goal;
 		this._permissionDelegate = config.permissionDelegate;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? {
@@ -465,11 +510,13 @@ export class AgentSession {
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installEpochCheck();
+		this._installPrepareNextTurn();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
 			includeAllExtensionTools: true,
 		});
+		this._gitState = collectGitState(this._cwd);
 	}
 
 	/** Model registry for API key resolution and model discovery */
@@ -541,7 +588,18 @@ export class AgentSession {
 				interactive,
 				context: "thread",
 				knownTools,
-				roleId: undefined,
+				// G1/G2: apply the leader role policy so write/edit/edit-diff are
+				// bounded by the cwd write-boundary, and `--disable-cwd-safeguards`
+				// becomes a real (independent) toggle for the leader. Reuses the
+				// existing, already-correct getRolePolicyRules.
+				roleId: "leader",
+				rolePolicyRules: getRolePolicyRules("leader", this._cwd, this._scratchpad.getRootDir(), {
+					disableCwdSafeguards: this._disableCwdSafeguards,
+					disableShellSafeguards: this._disableShellSafeguards,
+				}),
+				scratchpadPath: this._scratchpad.getRootDir(),
+				disableShellSafeguards: this._disableShellSafeguards,
+				cwd: this._cwd,
 			});
 
 			let permissionOverrideAllowed = false;
@@ -625,7 +683,7 @@ export class AgentSession {
 
 			// Extension tool_call hooks
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_call")) {
+			if (!runner.hasHandlers("tool_call") && !runner.hasHandlers("before_tool_call")) {
 				return undefined;
 			}
 
@@ -678,11 +736,11 @@ export class AgentSession {
 			}
 
 			const repeatGuardResult =
-				isError && result.content.some((content) => content.type === "text")
+				isError && (result.content ?? []).some((content) => content.type === "text")
 					? this._errorRepeatGuard.recordError(
 							toolCall.name,
 							args,
-							result.content
+							(result.content ?? [])
 								.filter((content) => content.type === "text")
 								.map((content) => content.text ?? "")
 								.join("\n"),
@@ -710,7 +768,7 @@ export class AgentSession {
 			);
 
 			const runner = this._extensionRunner;
-			if (!runner.hasHandlers("tool_result")) {
+			if (!runner.hasHandlers("tool_result") && !runner.hasHandlers("after_tool_call")) {
 				return formattedContent ? { content: formattedContent } : undefined;
 			}
 
@@ -746,6 +804,24 @@ export class AgentSession {
 				content: hookResultContent,
 				details: hookResult.details,
 				isError: hookResult.isError ?? isError,
+			};
+		};
+	}
+
+	/**
+	 * Re-snapshot tools and system prompt each turn so mid-run changes
+	 * (pi.setActiveTools, system-prompt overrides) reach the next provider
+	 * request within the same run. Without this, the agent loop freezes the
+	 * context snapshot taken at prompt() start.
+	 */
+	private _installPrepareNextTurn(): void {
+		this.agent.prepareNextTurn = () => {
+			return {
+				context: {
+					systemPrompt: this.agent.state.systemPrompt,
+					messages: this.agent.state.messages.slice(),
+					tools: this.agent.state.tools.slice(),
+				},
 			};
 		};
 	}
@@ -962,7 +1038,12 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+				this.sessionManager.appendMessage(
+					event.message,
+					event.message.role === "assistant"
+						? { llmFailed: (event.message as AssistantMessage).stopReason === "error" }
+						: undefined,
+				);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -1073,6 +1154,31 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 			this._turnIndex++;
+
+			// Leader max-turns cap: stop the agent once the cap is reached and
+			// steer it toward a final report as it approaches the cap.
+			if (!this._leaderTurnsStopped) {
+				this._leaderTurnCount++;
+				if (this._leaderTurnCount >= this._leaderMaxTurns) {
+					this._leaderTurnsStopped = true;
+					this.emitRuntimeEvent({
+						type: "leader_max_turns",
+						payload: {
+							maxTurns: this._leaderMaxTurns,
+							turnIndex: this._leaderTurnCount,
+						},
+					});
+					this.agent.abort();
+				} else if (!this._leaderTurnWarningSent && this._leaderTurnCount >= this._leaderMaxTurns - 3) {
+					this._leaderTurnWarningSent = true;
+					await this.agent.steer({
+						role: "user",
+						content:
+							"[System: You are near the leader turn limit. Stop starting new exploration. Return a concise final report now with: outcome, evidence gathered, commands/files checked, verification status, and remaining gaps. If incomplete, say exactly what remains instead of continuing.]",
+						timestamp: Date.now(),
+					} as AgentMessage);
+				}
+			}
 		} else if (event.type === "message_start") {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
@@ -1201,6 +1307,11 @@ export class AgentSession {
 	// Read-only State Access
 	// =========================================================================
 
+	/** Durable scratchpad for session artifacts. */
+	get scratchpad(): ScratchpadManager {
+		return this._scratchpad;
+	}
+
 	/** Full agent state */
 	get state(): AgentState {
 		return this.agent.state;
@@ -1287,6 +1398,21 @@ export class AgentSession {
 		return [...this._permissionRules];
 	}
 
+	/** Whether shell safeguards are disabled for this session (alpha22 --disable-shell-safeguards). */
+	get disableShellSafeguards(): boolean {
+		return this._disableShellSafeguards;
+	}
+
+	/** Whether cwd safeguards are disabled for spawned workers (alpha22 --disable-cwd-safeguards). */
+	get disableCwdSafeguards(): boolean {
+		return this._disableCwdSafeguards;
+	}
+
+	/** Initial goal objective (alpha22 --goal), if provided. */
+	get goal(): string | undefined {
+		return this._goal;
+	}
+
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
 	}
@@ -1357,6 +1483,35 @@ export class AgentSession {
 		return this.sessionManager.getSessionId();
 	}
 
+	/**
+	 * Read-only view of the per-fork worker entries captured during this session,
+	 * used to populate ATIF `subagent_trajectories`. Reached via the module-level
+	 * `ORCHESTRATORS` map to avoid holding a direct orchestrator reference.
+	 */
+	getForkEntries(): Map<string, SessionEntry[]> {
+		return getForkEntriesForSession(this.sessionId);
+	}
+
+	/**
+	 * Read-only view of the per-fork real fork metadata captured during this
+	 * session, used to populate ATIF spawn-step real `agentId`/`role`/`taskId`/
+	 * `mode`/`message`. Reached via the module-level `ORCHESTRATORS` map to
+	 * avoid holding a direct orchestrator reference.
+	 */
+	getForkMeta(): Map<
+		string,
+		{
+			agentId: string;
+			parentForkId: string | null;
+			role: string;
+			taskId: string | undefined;
+			mode: string;
+			message: string | undefined;
+		}
+	> {
+		return getForkMetaForSession(this.sessionId);
+	}
+
 	/** Current session display name, if set */
 	get sessionName(): string | undefined {
 		return this.sessionManager.getSessionName();
@@ -1421,19 +1576,19 @@ export class AgentSession {
 		}
 		const loaderSystemPrompt = this._resourceLoader.getSystemPrompt();
 		const loaderAppendSystemPrompt = this._resourceLoader.getAppendSystemPrompt();
-		const appendParts: string[] = [];
-		if (loaderAppendSystemPrompt.length > 0) appendParts.push(loaderAppendSystemPrompt.join("\n\n"));
-		appendParts.push(LEADER_PROMPT);
-		const appendSystemPrompt = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
+		// The canonical leader identity (LEADER_PROMPT) is the BODY of the
+		// system prompt. The variant/lineage tuning text is appended as the
+		// TAIL after the leader body, matching Magnitude alpha22's composition.
 		const loadedSkills = this._resourceLoader.getSkills().skills;
 		const loadedContextFiles = this._resourceLoader.getAgentsFiles().agentsFiles;
+		const leaderBody = renderLeaderSystemPrompt({
+			skills: formatSkillsForPrompt(loadedSkills, { role: this._skillFilterRole ?? "leader" }),
+		});
 
-		this._baseSystemPromptOptions = {
+		const tailOptions: BuildSystemPromptOptions = {
 			cwd: this._cwd,
 			skills: loadedSkills,
 			contextFiles: loadedContextFiles,
-			customPrompt: loaderSystemPrompt,
-			appendSystemPrompt,
 			selectedTools: validToolNames,
 			toolSnippets,
 			promptGuidelines,
@@ -1442,7 +1597,54 @@ export class AgentSession {
 			modelName: this.model?.name,
 			role: this._skillFilterRole,
 		};
+
+		// Build the variant/lineage tuning tail (tools list + variant guidance,
+		// no outer context). Prefer the project/system loader prompt as the
+		// customPrompt body when one is provided; otherwise fall back to the
+		// canonical leader identity.
+		const tailParts: string[] = [];
+		if (loaderAppendSystemPrompt.length > 0) tailParts.push(loaderAppendSystemPrompt.join("\n\n"));
+		tailParts.push(buildSystemPromptTail(tailOptions));
+		const appendSystemPrompt = tailParts.join("\n\n");
+
+		this._baseSystemPromptOptions = {
+			...tailOptions,
+			skipSkillsInTail: true,
+			customPrompt: (loaderSystemPrompt ?? "").length > 0 ? loaderSystemPrompt : leaderBody,
+			appendSystemPrompt,
+		};
 		return buildSystemPrompt(this._baseSystemPromptOptions);
+	}
+
+	/**
+	 * Format the current git state into a bounded text block for the system
+	 * prompt. Mirrors the formatting of `formatEnvironmentSnapshot` but is
+	 * refreshed every turn (not just for open-source prompt variants) and
+	 * sourced from porcelain v2 status. Returns undefined when not a git repo.
+	 */
+	private _formatGitStateBlock(): string | undefined {
+		const state = this._gitState;
+		if (!state) return undefined;
+		const lines: string[] = ["Git state:"];
+		lines.push(`- git_branch: ${state.branch ?? "(unavailable)"}`);
+		if (state.status.length > 0) {
+			lines.push("- git_status:");
+			for (const entry of state.status.slice(0, 50)) {
+				const path = entry.oldPath ? `${entry.oldPath} -> ${entry.path}` : entry.path;
+				lines.push(`  ${entry.x}${entry.y} ${path}`);
+			}
+			if (state.status.length > 50) {
+				lines.push(`... (${state.status.length - 50} more entries)`);
+			}
+		}
+		if (state.recentCommits.length > 0) {
+			lines.push("- recent_commits:");
+			for (const commit of state.recentCommits.slice(0, 10)) {
+				lines.push(`  ${commit}`);
+			}
+		}
+		const formatted = lines.join("\n");
+		return formatted.length > 8000 ? `${formatted.slice(0, 8000)}\n... (git state truncated)` : formatted;
 	}
 
 	/**
@@ -1659,6 +1861,54 @@ export class AgentSession {
 				return;
 			}
 
+			// Handle /max-turns command: report usage, update the cap, or resume
+			// a stopped leader. No-op when given no argument.
+			if (expandPromptTemplates && text.trim().startsWith("/max-turns")) {
+				preflightResult?.(true);
+				const arg = text.trim().slice("/max-turns".length).trim();
+				if (arg === "") {
+					await this.sendCustomMessage(
+						{
+							customType: "leader-max-turns",
+							content: `Leader turn cap: ${this._leaderMaxTurns}${
+								this._leaderTurnsStopped
+									? ` (reached at turn ${this._leaderTurnCount})`
+									: ` (turn ${this._leaderTurnCount}/${this._leaderMaxTurns} used)`
+							}. Use '/max-turns <n>' to change it.`,
+							display: true,
+						},
+						undefined,
+					);
+					return;
+				}
+				const parsed = Number.parseInt(arg, 10);
+				if (!Number.isInteger(parsed) || parsed <= 0) {
+					await this.sendCustomMessage(
+						{
+							customType: "leader-max-turns",
+							content: `Invalid /max-turns value: "${arg}". Expected a positive integer.`,
+							display: true,
+						},
+						undefined,
+					);
+					return;
+				}
+				this.settingsManager.setLeaderMaxTurns(parsed);
+				this._leaderMaxTurns = parsed;
+				if (this._leaderTurnsStopped && this._leaderTurnCount < parsed) {
+					this._leaderTurnsStopped = false;
+				}
+				await this.sendCustomMessage(
+					{
+						customType: "leader-max-turns",
+						content: `Leader turn cap set to ${parsed}${this._leaderTurnsStopped ? "" : " (resumed)"}.`,
+						display: true,
+					},
+					undefined,
+				);
+				return;
+			}
+
 			// Handle extension commands first (execute immediately, even during streaming)
 			// Extension commands manage their own LLM interaction via pi.sendMessage()
 			if (expandPromptTemplates && text.startsWith("/")) {
@@ -1812,6 +2062,24 @@ export class AgentSession {
 		Effect.runSync(this._epochCoordinator.beginTurn());
 		this._turnEpochToken = this._epochCoordinator.captureToken();
 
+		// Pre-send payload guard: proactively compact if the outgoing request would
+		// exceed the context window. Catches providers that don't return a detectable
+		// overflow error (silent growth, as in mrkkpimo).
+		if (this.model && this.settingsManager.getCompactionEnabled() && Array.isArray(messages)) {
+			const outgoingTokens = estimateMessagesTokens(this.agent.state.messages) + estimateMessagesTokens(messages);
+			const softCap = computeSoftCap(this.model.contextWindow);
+			const hardCap = this.model.contextWindow - OUTPUT_TOKEN_RESERVE;
+			if (outgoingTokens > hardCap || outgoingTokens > softCap * 1.1) {
+				const lastAssistant = this._findLastAssistantMessage();
+				if (lastAssistant && (await this._checkCompaction(lastAssistant, false))) {
+					// Compaction ran and rebuilt this.agent.state.messages. Rebuild the
+					// local `messages` array from the compacted history plus the new
+					// user message(s) so we don't send a stale oversized payload.
+					messages = this.agent.state.messages.concat(messages.filter((m) => m.role === "user"));
+				}
+			}
+		}
+
 		// Wire up session ID on scratchpad for artifact metadata tracing
 		this._scratchpad.setSessionId(this.sessionId);
 
@@ -1823,6 +2091,14 @@ export class AgentSession {
 			if (!treeOID) {
 				// Snapshot creation failed; continue without blocking
 			}
+		}
+
+		// Per-turn git state refresh (G-7.2): keep branch/status/commits current
+		// and surface them in the system prompt every turn for all prompt variants.
+		this._gitState = collectGitState(this._cwd);
+		const gitBlock = this._formatGitStateBlock();
+		if (gitBlock) {
+			this.agent.state.systemPrompt = `${this.agent.state.systemPrompt}\n\n${gitBlock}`;
 		}
 
 		await this._runAgentPrompt(messages);
@@ -2130,6 +2406,10 @@ export class AgentSession {
 	 */
 	async abort(): Promise<void> {
 		Effect.runSync(this._epochCoordinator.interrupt("abort"));
+		// S8: mirror mag alpha22 `interruptToStep` by recording the interruption as
+		// a session entry so the ATIF alpha22 export reproduces the interrupt step.
+		// A single-session abort is not a full kill, so allKilled = false.
+		this.sessionManager.appendInterrupt(this.sessionId, false);
 		this._turnEpochToken = undefined;
 		this.abortRetry();
 		this.agent.abort();
@@ -2188,8 +2468,40 @@ export class AgentSession {
 	}
 
 	/**
+	 * Get the live per-role model overrides (roleId -> `${provider}/${id}`).
+	 * Read fresh so in-session changes apply to spawned workers immediately.
+	 */
+	getRoleModelOverrides(): Record<string, string> {
+		return { ...this._roleModelOverrides };
+	}
+
+	/**
+	 * Set a per-role model override. Validates the role exists and that the
+	 * model has configured auth. Persists to global settings so it survives reload.
+	 */
+	setRoleModel(role: string, model: Model<any>): void {
+		if (!ROLE_DEFINITIONS[role]) {
+			throw new Error(`Unknown role: ${role}`);
+		}
+		if (!this._modelRegistry.hasConfiguredAuth(model)) {
+			throw new Error(`No API key for ${model.provider}/${model.id}`);
+		}
+		this._roleModelOverrides[role] = `${model.provider}/${model.id}`;
+		this.settingsManager.setRoleModels({ ...this._roleModelOverrides });
+	}
+
+	/**
+	 * Reset a role's model override back to its default (per-role id / tier fallback).
+	 */
+	resetRoleModel(role: string): void {
+		if (!ROLE_DEFINITIONS[role]) {
+			throw new Error(`Unknown role: ${role}`);
+		}
+		delete this._roleModelOverrides[role];
+		this.settingsManager.setRoleModels({ ...this._roleModelOverrides });
+	}
+	/**
 	 * Cycle to next/previous model.
-	 * Uses scoped models (from --models flag) if available, otherwise all available models.
 	 * @param direction - "forward" (default) or "backward"
 	 * @returns The new model info, or undefined if only one model available
 	 */
@@ -2393,7 +2705,7 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
 
-			const preparation = prepareCompaction(pathEntries, settings);
+			const preparation = prepareCompaction(pathEntries, settings, this.model.contextWindow);
 			if (!preparation) {
 				// Check why we can't compact
 				const lastEntry = pathEntries[pathEntries.length - 1];
@@ -2545,6 +2857,8 @@ export class AgentSession {
 	private async _runAutoCompaction(reason: "threshold" | "overflow", willRetry: boolean): Promise<boolean> {
 		this._compactionAbortController = this._cancellationScope.create("compaction");
 		let started = false;
+		let ended = false;
+		const timeout = setTimeout(() => this.abortCompaction(), COMPACTION_TIMEOUT_MS);
 		try {
 			if (!this.model) {
 				return false;
@@ -2552,7 +2866,10 @@ export class AgentSession {
 
 			const pathEntries = this.sessionManager.getBranch();
 			const settings = this.settingsManager.getCompactionSettings();
-			const preparation = prepareCompaction(pathEntries, settings);
+			if (settings.continuationCharThreshold === 100_000) {
+				settings.continuationCharThreshold = computeContinuationCharThreshold(this.model.contextWindow);
+			}
+			const preparation = prepareCompaction(pathEntries, settings, this.model.contextWindow);
 			if (!preparation) {
 				return false;
 			}
@@ -2594,17 +2911,32 @@ export class AgentSession {
 				tokensBefore = extensionCompaction.tokensBefore;
 				details = extensionCompaction.details;
 			} else {
-				const result = await compact(
-					preparation,
-					this.model,
-					apiKey,
-					headers,
-					undefined,
-					this._compactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFn,
-					env,
-				);
+				let result: CompactionResult | null = null;
+				for (let attempt = 0; attempt < COMPACTION_MAX_RETRIES; attempt++) {
+					result = await this._runCompactionTurn(
+						preparation,
+						apiKey,
+						headers,
+						env,
+						this._compactionAbortController.signal,
+					);
+					if (result) break;
+				}
+				if (!result) {
+					const recovered = await this._extractiveTailKeepFallback(reason);
+					if (recovered) {
+						this._emit({
+							type: "compaction_end",
+							reason,
+							result: undefined,
+							aborted: false,
+							willRetry: false,
+						});
+						ended = true;
+						return this.agent.hasQueuedMessages();
+					}
+					throw new Error("Auto-compaction failed: model did not call compact and fallback unavailable");
+				}
 				summary = result.summary;
 				firstKeptEntryId = result.firstKeptEntryId;
 				tokensBefore = result.tokensBefore;
@@ -2644,6 +2976,7 @@ export class AgentSession {
 				aborted: false,
 				willRetry,
 			});
+			ended = true;
 
 			if (willRetry) {
 				const lastMessage = this.agent.state.messages[this.agent.state.messages.length - 1];
@@ -2657,6 +2990,23 @@ export class AgentSession {
 		} catch (error) {
 			if (started) {
 				const message = error instanceof Error ? error.message : String(error);
+				// Graceful degradation: alpha22 falls back to tail-keeping rather than
+				// throwing when summarization fails. Attempt the extractive fallback;
+				// only emit a hard failure if even that cannot run. The fallback itself
+				// does NOT emit the terminal event — this block owns exactly one
+				// compaction_end per started compaction (single start -> single end).
+				const recovered = await this._extractiveTailKeepFallback(reason);
+				if (recovered) {
+					this._emit({
+						type: "compaction_end",
+						reason,
+						result: undefined,
+						aborted: false,
+						willRetry: false,
+					});
+					ended = true;
+					return this.agent.hasQueuedMessages();
+				}
 				this._emit({
 					type: "compaction_end",
 					reason,
@@ -2668,11 +3018,208 @@ export class AgentSession {
 							? `Context overflow recovery failed: ${message}`
 							: `Auto-compaction failed: ${message}`,
 				});
+				ended = true;
 			}
 			return false;
 		} finally {
+			clearTimeout(timeout);
 			this._cancellationScope.clear("compaction", this._compactionAbortController);
 			this._compactionAbortController = undefined;
+			// Defensive: never leave a started compaction without a terminal event.
+			if (started && !ended) {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+					errorMessage: "Auto-compaction terminated without completion (defensive guard).",
+				});
+			}
+		}
+	}
+
+	private async _runCompactionTurn(
+		preparation: CompactionPreparation,
+		apiKey: string | undefined,
+		headers: Record<string, string> | undefined,
+		env: Record<string, string> | undefined,
+		signal: AbortSignal,
+	): Promise<CompactionResult | null> {
+		const model = this.model;
+		if (!model) return null;
+
+		const messages = convertToLlm(this.agent.state.messages);
+		messages.push({
+			role: "user",
+			content: [{ type: "text", text: COMPACTION_REFLECTION_PROMPT }],
+			timestamp: Date.now(),
+		});
+
+		const compactDefinition = this.getToolDefinition("compact");
+		if (!compactDefinition) {
+			throw new Error("Compaction tool is not registered");
+		}
+
+		const context: Context = {
+			systemPrompt: this.agent.state.systemPrompt,
+			messages,
+			tools: [
+				{
+					name: compactDefinition.name,
+					description: compactDefinition.description,
+					parameters: compactDefinition.parameters,
+				},
+			],
+		};
+		const stream = await this.agent.streamFn(model, context, {
+			apiKey,
+			headers,
+			env,
+			reasoning: this.thinkingLevel === "off" ? undefined : this.thinkingLevel,
+			signal,
+		});
+
+		for await (const _event of stream) {
+			if (signal.aborted) {
+				throw new Error("Compaction cancelled");
+			}
+		}
+		const response = await stream.result();
+		if (response.stopReason === "error" || response.stopReason === "aborted") {
+			throw new Error(`Compaction turn failed: ${response.errorMessage || response.stopReason}`);
+		}
+
+		const toolCall = response.content.find(
+			(content): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+				content.type === "toolCall" && content.name === "compact",
+		);
+		if (!toolCall) return null;
+
+		const args = toolCall.arguments as {
+			summary?: unknown;
+			reflection?: unknown;
+			files?: unknown;
+		};
+		if (typeof args.summary !== "string" || typeof args.reflection !== "string") {
+			return null;
+		}
+
+		const requestedFiles = Array.isArray(args.files)
+			? args.files.filter((file): file is string => typeof file === "string").slice(0, COMPACT_MAX_FILES)
+			: [];
+		const preservedFiles: Array<{ path: string; content: string }> = [];
+		// alpha22 budget: maxPayloadTokens = max(4000, softCap - systemPromptTokens
+		// - sessionContextTokens - keptTailTokens - margin), charBudget = *3.
+		// keptTailTokens is the tokens of the recent messages that survive
+		// compaction (tokensBefore minus the messages being summarized).
+		const softCap = Math.floor(computeSoftCap(model.contextWindow));
+		const systemPromptTokens = Math.ceil((this.agent.state.systemPrompt?.length ?? 0) / 4);
+		const sessionContextTokens = this.agent.state.messages[0] ? estimateTokens(this.agent.state.messages[0]!) : 0;
+		const keptTailTokens = Math.max(
+			0,
+			preparation.tokensBefore - estimateContextTokens(preparation.messagesToSummarize).tokens,
+		);
+		const maxPayloadTokens = Math.max(
+			4000,
+			softCap - systemPromptTokens - sessionContextTokens - keptTailTokens - 2000,
+		);
+		const charBudget = maxPayloadTokens * CHARS_PER_TOKEN_LOWER;
+		let remainingChars = Math.max(0, charBudget - args.summary.length - args.reflection.length);
+		for (const filePath of requestedFiles) {
+			if (signal.aborted || remainingChars <= 0) break;
+			try {
+				const contents = readFileSync(resolvePath(filePath, this._cwd), "utf-8");
+				const limit = Math.min(COMPACT_MAX_FILE_CHARS, remainingChars);
+				preservedFiles.push({
+					path: filePath,
+					content: contents.length <= limit ? contents : `[${contents.length} chars — read file as needed]`,
+				});
+				remainingChars -= Math.min(contents.length, limit);
+			} catch {
+				// Alpha22 logs and skips files that cannot be read.
+			}
+		}
+
+		const details: CompactionDetails & { reflection: string } = {
+			readFiles: requestedFiles,
+			modifiedFiles: [],
+			files: preservedFiles,
+			reflection: args.reflection,
+		};
+		return {
+			summary: args.summary,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details,
+		};
+	}
+
+	/**
+	 * Extractive tail-keep fallback (alpha22 `COMPACTION_FALLBACK_KEEP_RATIO=0.25`):
+	 * when LLM summarization fails, keep the initial task message plus the most
+	 * recent entries whose accumulated tokens fit within `softCap * 0.25`, walking
+	 * the raw session entries backwards from the tail. Mirrors alpha22 degrading
+	 * to token-budget tail-keeping rather than throwing.
+	 *
+	 * Unlike the prior count-fraction implementation, this matches mag's
+	 * token-budget semantics (mag:114393): `fallbackBudget = softCap * 0.25`,
+	 * accumulate `estimatedTokens` over raw entries, no synthetic note injected.
+	 *
+	 * Callers own emission of the terminal `compaction_end` event so that a single
+	 * `compaction_start` always maps to exactly one `compaction_end`.
+	 */
+	private async _extractiveTailKeepFallback(_reason: "threshold" | "overflow"): Promise<boolean> {
+		try {
+			const pathEntries = this.sessionManager.getBranch();
+			if (pathEntries.length === 0) return false;
+
+			const model = this.model;
+			const softCap = model ? Math.floor(computeSoftCap(model.contextWindow)) : 0;
+			const fallbackBudget = softCap > 0 ? softCap * COMPACTION_FALLBACK_KEEP_RATIO : 0;
+
+			// Per-entry token estimate. Message entries use the shared estimator;
+			// system/bookkeeping entries (compaction, branch_summary, label, etc.)
+			// carry negligible tokens, approximated as a small constant.
+			const entryTokens = (entry: SessionEntry): number => {
+				if (entry.type === "message") return estimateTokens(entry.message);
+				return Math.ceil(64 / 4);
+			};
+
+			// mag keeps the leading context entry (system prompt in mag; the initial
+			// task message here) outside the budget and walks the remaining entries
+			// backwards (mag:114393 `fork4.messages.slice(1)`).
+			const allNonSession = pathEntries.slice(1);
+			let accumulated = 0;
+			let keepFrom = allNonSession.length;
+			if (fallbackBudget > 0) {
+				for (let i = allNonSession.length - 1; i >= 0; i--) {
+					if (accumulated + entryTokens(allNonSession[i]) > fallbackBudget) break;
+					accumulated += entryTokens(allNonSession[i]);
+					keepFrom = i;
+				}
+			}
+
+			const leadingEntry = pathEntries[0]!;
+			const keptMessages: AgentMessage[] = [];
+			if (leadingEntry.type === "message") keptMessages.push(leadingEntry.message);
+			for (const entry of allNonSession.slice(keepFrom)) {
+				if (entry.type === "message") keptMessages.push(entry.message);
+			}
+			if (keptMessages.length === 0) return false;
+
+			const firstKeptEntry = allNonSession[keepFrom] ?? leadingEntry;
+			this.agent.state.messages = keptMessages;
+			this.sessionManager.appendCompaction(
+				"[Context compressed: earlier history removed via extractive tail-keep fallback]",
+				firstKeptEntry?.id ?? leadingEntry.id,
+				estimateMessagesTokens(keptMessages),
+				{ fallback: true },
+				false,
+			);
+			return true;
+		} catch {
+			return false;
 		}
 	}
 
@@ -2735,11 +3282,22 @@ export class AgentSession {
 			usageTokens = lastSuccessfulUsage;
 		}
 
-		const continuationCharThreshold = settings.continuationCharThreshold ?? 100000;
+		let continuationCharThreshold = settings.continuationCharThreshold ?? 100000;
+		if (continuationCharThreshold === 100_000) {
+			continuationCharThreshold = computeContinuationCharThreshold(this.model.contextWindow);
+		}
 		const contextChars = estimateContextChars(this.agent.state.messages);
+		// Use a running token estimate (anchored last usage + char-estimated trailing
+		// delta) for the normal threshold check so compaction fires mid-growth between
+		// provider usage points, matching alpha22's computeTokenEstimate. The
+		// error-recovery path still relies on real provider usage (usageTokens below).
+		const thresholdTokens =
+			assistantMessage.stopReason === "error"
+				? usageTokens
+				: estimateContextTokens(this.agent.state.messages).tokens;
 		if (
 			!(continuationCharThreshold > 0 && contextChars >= continuationCharThreshold) &&
-			!shouldCompact(usageTokens, this.model.contextWindow, settings)
+			!shouldCompact(thresholdTokens, this.model.contextWindow, settings)
 		) {
 			return false;
 		}
@@ -3118,8 +3676,10 @@ export class AgentSession {
 				toolRegistry.set("checkpoint_changes", wrappedCheckpointTool);
 			}
 		}
-		// Register scratchpad tools (always available)
-		if (builtinsAvailable && isAllowedTool("scratchpad_save")) {
+		// Register scratchpad tools (always available).
+		// Skip if an extension already registered a tool with the same name, so
+		// extensions can override builtins by name.
+		if (builtinsAvailable && isAllowedTool("scratchpad_save") && !toolRegistry.has("scratchpad_save")) {
 			const saveDef = createScratchpadSaveToolDefinition(this._scratchpad);
 			const saveEntry: ToolDefinitionEntry = {
 				definition: saveDef,
@@ -3133,7 +3693,7 @@ export class AgentSession {
 				wrapToolDefinition(saveDef, () => runner.createContext()),
 			);
 		}
-		if (builtinsAvailable && isAllowedTool("scratchpad_load")) {
+		if (builtinsAvailable && isAllowedTool("scratchpad_load") && !toolRegistry.has("scratchpad_load")) {
 			const loadDef = createScratchpadLoadToolDefinition(this._scratchpad);
 			const loadEntry: ToolDefinitionEntry = {
 				definition: loadDef,
@@ -3147,7 +3707,7 @@ export class AgentSession {
 				wrapToolDefinition(loadDef, () => runner.createContext()),
 			);
 		}
-		if (builtinsAvailable && isAllowedTool("web_search")) {
+		if (builtinsAvailable && isAllowedTool("web_search") && !toolRegistry.has("web_search")) {
 			const webSearchDef = createWebSearchToolDefinition();
 			this._toolDefinitions.set("web_search", {
 				definition: webSearchDef,
@@ -3160,7 +3720,7 @@ export class AgentSession {
 				wrapToolDefinition(webSearchDef, () => runner.createContext()),
 			);
 		}
-		if (builtinsAvailable && isAllowedTool("web_fetch")) {
+		if (builtinsAvailable && isAllowedTool("web_fetch") && !toolRegistry.has("web_fetch")) {
 			const webFetchDef = createWebFetchToolDefinition();
 			this._toolDefinitions.set("web_fetch", {
 				definition: webFetchDef,
@@ -3284,8 +3844,9 @@ export class AgentSession {
 					]),
 				)
 			: createAllToolDefinitions(this._cwd, {
+					scratchpadPath: this._scratchpad.getRootDir(),
 					read: { autoResizeImages },
-					bash: { commandPrefix: shellCommandPrefix, shellPath },
+					bash: { commandPrefix: shellCommandPrefix, shellPath, scratchpadPath: this._scratchpad.getRootDir() },
 				});
 
 		this._baseToolDefinitions = new Map(
@@ -3407,7 +3968,7 @@ export class AgentSession {
 		const serverDelayMs = isToolValidation ? 0 : classification.retryDelayMs;
 		const delayMs = isToolValidation
 			? 0
-			: computeJitteredDelay(this._retryAttempt - 1, settings.baseDelayMs, 60000, serverDelayMs);
+			: computeJitteredDelay(this._retryAttempt - 1, settings.baseDelayMs, 30000, serverDelayMs);
 
 		this._emit({
 			type: "auto_retry_start",
@@ -3514,6 +4075,7 @@ export class AgentSession {
 				{
 					onChunk,
 					signal: this._bashAbortController.signal,
+					scratchpadPath: this._scratchpad.getRootDir(),
 				},
 			);
 

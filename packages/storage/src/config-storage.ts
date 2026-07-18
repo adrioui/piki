@@ -1,6 +1,6 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import { Context, Data, Effect, Layer } from "effect";
+import { atomicWriteFile, stringifyValidated } from "./atomic-write.ts";
 import { GlobalStorageTag } from "./global-storage.ts";
 
 export interface ContextLimitPolicy {
@@ -50,8 +50,7 @@ function makeConfigStorage(configFile: string): ConfigStorage {
 	const save = (config: StoredConfig) =>
 		Effect.tryPromise({
 			try: async () => {
-				await mkdir(dirname(configFile), { recursive: true, mode: 0o700 });
-				await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+				await atomicWriteFile(configFile, stringifyValidated(config));
 			},
 			catch: (cause) =>
 				new ConfigStorageError({ operation: "save", message: `Failed to save config to ${configFile}`, cause }),

@@ -2,9 +2,9 @@ import { describe, expect, test } from "vitest";
 import { formatToolResultForModel } from "../src/core/activity-formatter.ts";
 
 describe("formatToolResultForModel", () => {
-	test("prefixes bash results with the command", () => {
+	test("prefixes shell results with the command", () => {
 		const content = formatToolResultForModel(
-			"bash",
+			"shell",
 			{ command: "npm test" },
 			{ content: [{ type: "text", text: "ok" }], details: undefined },
 			false,
@@ -37,13 +37,13 @@ describe("formatToolResultForModel", () => {
 		const result = { content: [{ type: "text" as const, text: "file contents" }], details: undefined };
 
 		expect(formatToolResultForModel("read", { file_path: "/repo/a.ts" }, result, false)).toBeUndefined();
-		expect(formatToolResultForModel("bash", { command: "bad" }, result, true)).toBeUndefined();
+		expect(formatToolResultForModel("shell", { command: "bad" }, result, true)).toBeUndefined();
 	});
 
 	test("does not double-prefix already formatted activity results", () => {
 		expect(
 			formatToolResultForModel(
-				"bash",
+				"shell",
 				{ command: "npm test" },
 				{ content: [{ type: "text", text: "[bash] $ npm test\nok" }], details: undefined },
 				false,

@@ -31,6 +31,18 @@ describe("image processing pipeline", () => {
 		expect(detectSupportedImageMimeType(createTinyBmp1x1Red24bpp())).toBe("image/bmp");
 	});
 
+	it("detects SVG files from tag or xml declaration", () => {
+		expect(detectSupportedImageMimeType(Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'></svg>"))).toBe(
+			"image/svg+xml",
+		);
+		expect(detectSupportedImageMimeType(Buffer.from("  <?xml version='1.0'?><svg></svg>"))).toBe("image/svg+xml");
+		expect(detectSupportedImageMimeType(Buffer.from("<svg></svg>"))).toBe("image/svg+xml");
+	});
+
+	it("does not classify non-image text as SVG", () => {
+		expect(detectSupportedImageMimeType(Buffer.from("<html><body></body></html>"))).toBe(null);
+	});
+
 	it("converts BMP files to PNG attachments when auto-resize is disabled", async () => {
 		const result = await processImage(createTinyBmp1x1Red24bpp(), "image/bmp", { autoResizeImages: false });
 

@@ -61,7 +61,7 @@ describe("ClinePass provider", () => {
 		const auth = await models.getAuth(model);
 
 		expect(auth).toEqual({
-			auth: { apiKey: "cline_test", baseUrl: "https://api.cline.bot" },
+			auth: { apiKey: "cline_test", baseUrl: "https://api.cline.bot/api/v1" },
 			source: "CLINE_API_KEY",
 		});
 	});
@@ -80,7 +80,7 @@ describe("ClinePass provider", () => {
 		const auth = await models.getAuth(model);
 
 		expect(auth).toEqual({
-			auth: { apiKey: "workos:test", baseUrl: "https://api.cline.bot" },
+			auth: { apiKey: "workos:test", baseUrl: "https://api.cline.bot/api/v1" },
 			source: "OAuth",
 		});
 	});

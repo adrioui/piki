@@ -58,8 +58,16 @@ export function bindWithPikiOptions(model: BoundPikiModel, baseOptions: unknown)
 	};
 }
 
-export const pikiOptions = {
-	maxTokens: NativeChatCompletions.options.maxTokens,
+export const pikiOptions: {
+	maxTokens: OptionDef;
+	toolChoice: OptionDef;
+	pikiAdditionalOptions: OptionDef;
+} = {
+	maxTokens: NativeChatCompletions.options.maxTokens as OptionDef,
 	toolChoice: Option3.define((v: string) => ({ tool_choice: v })),
 	pikiAdditionalOptions: Option3.define((v: unknown) => ({ piki_additional_options: v })),
 };
+
+interface OptionDef {
+	_tag: "OptionDef";
+}

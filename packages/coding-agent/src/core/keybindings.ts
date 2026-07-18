@@ -65,7 +65,7 @@ export const KEYBINDINGS = {
 	...TUI_KEYBINDINGS,
 	"app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
 	"app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
-	"app.exit": { defaultKeys: "ctrl+d", description: "Exit when editor is empty" },
+	"app.exit": { defaultKeys: "ctrl+q", description: "Exit when editor is empty" },
 	"app.suspend": {
 		defaultKeys: process.platform === "win32" ? [] : "ctrl+z",
 		description: "Suspend to background",
@@ -133,7 +133,7 @@ export const KEYBINDINGS = {
 		description: "Toggle tree label timestamps",
 	},
 	"app.session.togglePath": {
-		defaultKeys: "ctrl+p",
+		defaultKeys: "alt+p",
 		description: "Toggle session path display",
 	},
 	"app.session.toggleSort": {
@@ -145,7 +145,7 @@ export const KEYBINDINGS = {
 		description: "Rename session",
 	},
 	"app.session.delete": {
-		defaultKeys: "ctrl+d",
+		defaultKeys: "alt+x",
 		description: "Delete session",
 	},
 	"app.session.deleteNoninvasive": {
@@ -153,7 +153,7 @@ export const KEYBINDINGS = {
 		description: "Delete session when query is empty",
 	},
 	"app.models.save": {
-		defaultKeys: "ctrl+s",
+		defaultKeys: "alt+s",
 		description: "Save model selection",
 	},
 	"app.models.enableAll": {
@@ -161,15 +161,15 @@ export const KEYBINDINGS = {
 		description: "Enable all models",
 	},
 	"app.models.clearAll": {
-		defaultKeys: "ctrl+x",
+		defaultKeys: "alt+c",
 		description: "Clear all models",
 	},
 	"app.models.toggleProvider": {
-		defaultKeys: "ctrl+p",
+		defaultKeys: "alt+t",
 		description: "Toggle all models for provider",
 	},
 	"app.models.reorderUp": {
-		defaultKeys: "alt+up",
+		defaultKeys: "alt+r",
 		description: "Move model up in order",
 	},
 	"app.models.reorderDown": {
@@ -177,11 +177,11 @@ export const KEYBINDINGS = {
 		description: "Move model down in order",
 	},
 	"app.tree.filter.default": {
-		defaultKeys: "ctrl+d",
+		defaultKeys: "ctrl+shift+f",
 		description: "Tree filter: default view",
 	},
 	"app.tree.filter.noTools": {
-		defaultKeys: "ctrl+t",
+		defaultKeys: "ctrl+shift+t",
 		description: "Tree filter: hide tool results",
 	},
 	"app.tree.filter.userOnly": {
@@ -189,15 +189,15 @@ export const KEYBINDINGS = {
 		description: "Tree filter: user messages only",
 	},
 	"app.tree.filter.labeledOnly": {
-		defaultKeys: "ctrl+l",
+		defaultKeys: "ctrl+shift+l",
 		description: "Tree filter: labeled entries only",
 	},
 	"app.tree.filter.all": {
-		defaultKeys: "ctrl+a",
+		defaultKeys: "ctrl+shift+a",
 		description: "Tree filter: show all entries",
 	},
 	"app.tree.filter.cycleForward": {
-		defaultKeys: "ctrl+o",
+		defaultKeys: "ctrl+shift+c",
 		description: "Tree filter: cycle forward",
 	},
 	"app.tree.filter.cycleBackward": {

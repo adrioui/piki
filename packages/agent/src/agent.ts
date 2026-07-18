@@ -1,4 +1,5 @@
 import {
+	type CacheRetention,
 	type ImageContent,
 	type Message,
 	type Model,
@@ -9,6 +10,7 @@ import {
 	type Transport,
 } from "@piki/ai/compat";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.ts";
+import { injectTurnBoundarySeparators } from "./turn-boundaries.ts";
 import type {
 	AfterToolCallContext,
 	AfterToolCallResult,
@@ -30,9 +32,10 @@ import type {
 export type { QueueMode } from "./types.ts";
 
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
-	return messages.filter(
+	const filtered = messages.filter(
 		(message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
 	);
+	return injectTurnBoundarySeparators(filtered);
 }
 
 const EMPTY_USAGE = {
@@ -114,10 +117,13 @@ export interface AgentOptions {
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
+	cacheRetention?: CacheRetention;
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
 	toolExecution?: ToolExecutionMode;
+	/** Optional per-tool execution timeout resolver, in milliseconds. */
+	toolTimeout?: (toolName: string) => number | undefined;
 	/**
 	 * Optional epoch staleness check. See {@link AgentLoopConfig.checkEpoch}.
 	 */
@@ -202,6 +208,8 @@ export class Agent {
 	private activeRun?: ActiveRun;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
+	/** Prompt-cache retention forwarded to providers ("short" | "long"). */
+	public cacheRetention?: CacheRetention;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
 	public thinkingBudgets?: ThinkingBudgets;
 	/** Preferred transport forwarded to the stream function. */
@@ -210,6 +218,8 @@ export class Agent {
 	public maxRetryDelayMs?: number;
 	/** Tool execution strategy for assistant messages that contain multiple tool calls. */
 	public toolExecution: ToolExecutionMode;
+	/** Optional per-tool execution timeout resolver, in milliseconds. */
+	public toolTimeout?: (toolName: string) => number | undefined;
 	/** Optional epoch staleness check for interrupt-driven result dropping. */
 	public checkEpoch?: () => boolean | undefined;
 
@@ -229,10 +239,12 @@ export class Agent {
 		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
+		this.cacheRetention = options.cacheRetention;
 		this.thinkingBudgets = options.thinkingBudgets;
 		this.transport = options.transport ?? "auto";
 		this.maxRetryDelayMs = options.maxRetryDelayMs;
 		this.toolExecution = options.toolExecution ?? "parallel";
+		this.toolTimeout = options.toolTimeout;
 	}
 
 	/**
@@ -442,12 +454,14 @@ export class Agent {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
 			sessionId: this.sessionId,
+			cacheRetention: this.cacheRetention,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,
 			transport: this.transport,
 			thinkingBudgets: this.thinkingBudgets,
 			maxRetryDelayMs: this.maxRetryDelayMs,
 			toolExecution: this.toolExecution,
+			toolTimeout: this.toolTimeout,
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			checkEpoch: this.checkEpoch,

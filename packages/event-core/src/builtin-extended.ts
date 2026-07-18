@@ -232,50 +232,6 @@ export function createPermissionPolicyProjection<TEvent extends EventEnvelope = 
 	};
 }
 
-export interface CompactionState {
-	status: "idle" | "running" | "failed";
-	lastCompaction: Bag | null;
-	tokenEstimate: number;
-}
-
-export const CompactionSignals = {
-	thresholdReached: createSignal("Compaction/thresholdReached", "Context usage exceeded the soft cap"),
-};
-
-export function createCompactionProjection<TEvent extends EventEnvelope = EventEnvelope>(): ProjectionDefinition<
-	TEvent,
-	CompactionState
-> {
-	return {
-		name: "Compaction",
-		reads: ["ContextUsage"],
-		writes: [],
-		signals: [CompactionSignals.thresholdReached],
-		initialState: (): CompactionState => ({ status: "idle", lastCompaction: null, tokenEstimate: 0 }),
-		reduce: (state, event) => {
-			const p = payload(event);
-			if (event.type === "compaction_started" || event.type === "session.compaction_started") {
-				return { ...state, status: "running", lastCompaction: { ...p, startedAt: event.timestamp } };
-			}
-			if (event.type === "compaction_ended" || event.type === "session.compaction_ended") {
-				return {
-					...state,
-					status: p.aborted ? "failed" : "idle",
-					lastCompaction: { ...p, endedAt: event.timestamp },
-				};
-			}
-			if (event.type === "message_end")
-				return { ...state, tokenEstimate: num(p.tokenEstimate, state.tokenEstimate) };
-			return state;
-		},
-		extractSignals: (_state, event): Signal[] =>
-			(event.type === "compaction_started" || event.type === "session.compaction_started") &&
-			payload(event).reason === "threshold"
-				? [{ type: CompactionSignals.thresholdReached.type, payload: payload(event) }]
-				: [],
-	};
-}
-
 export interface TurnState {
 	turnId: string | null;
 	chainId: string | null;
@@ -665,7 +621,6 @@ export function createBuiltinExtendedProjections<TEvent extends EventEnvelope = 
 		createDisplayProjection<TEvent>(),
 		createAutopilotStateProjection<TEvent>(),
 		createPermissionPolicyProjection<TEvent>(),
-		createCompactionProjection<TEvent>(),
 		createTurnProjection<TEvent>(),
 		createForkProjection<TEvent>(),
 		createAgentStatusProjection<TEvent>(),

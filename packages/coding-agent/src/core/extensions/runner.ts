@@ -936,58 +936,69 @@ export class ExtensionRunner {
 				if (!handlers || handlers.length === 0) continue;
 
 				for (const handler of handlers) {
-					const handlerResult = await handler(event, ctx);
+					try {
+						const handlerResult = await handler(event, ctx);
 
-					if (!handlerResult) continue;
+						if (!handlerResult) continue;
 
-					// Check if this is a middleware-style result (has action property)
-					const anyResult = handlerResult as Record<string, unknown>;
-					if (typeof anyResult.action === "string") {
-						switch (anyResult.action) {
-							case "allow":
-								// Continue to next handler with current (possibly mutated) event
-								break;
-							case "modify":
-								// Copy modified args into event.input in place so the original
-								// reference (shared with beforeToolCall's args) reflects the changes.
-								if (anyResult.args && typeof anyResult.args === "object") {
-									const modifiedArgs = anyResult.args as Record<string, unknown>;
-									const input = event.input as Record<string, unknown>;
-									// Clear existing keys
-									for (const key of Object.keys(input)) {
-										delete input[key];
+						// Check if this is a middleware-style result (has action property)
+						const anyResult = handlerResult as Record<string, unknown>;
+						if (typeof anyResult.action === "string") {
+							switch (anyResult.action) {
+								case "allow":
+									// Continue to next handler with current (possibly mutated) event
+									break;
+								case "modify":
+									// Copy modified args into event.input in place so the original
+									// reference (shared with beforeToolCall's args) reflects the changes.
+									if (anyResult.args && typeof anyResult.args === "object") {
+										const modifiedArgs = anyResult.args as Record<string, unknown>;
+										const input = event.input as Record<string, unknown>;
+										// Clear existing keys
+										for (const key of Object.keys(input)) {
+											delete input[key];
+										}
+										// Copy new keys
+										for (const [key, value] of Object.entries(modifiedArgs)) {
+											input[key] = value;
+										}
 									}
-									// Copy new keys
-									for (const [key, value] of Object.entries(modifiedArgs)) {
-										input[key] = value;
-									}
-								}
-								break;
-							case "synthesize":
-								// Return immediately with synthesized result
-								return {
-									block: true,
-									reason: "synthesized",
-									synthesizeResult: (anyResult as Record<string, unknown>)
-										.result as ToolCallEventResult["synthesizeResult"],
-									synthesizeIsError: !!anyResult.isError,
-								} as ToolCallEventResult;
-							case "reject":
-								return {
-									block: true,
-									reason:
-										typeof anyResult.reason === "string"
-											? anyResult.reason
-											: "Tool call was rejected by extension",
-								} as ToolCallEventResult;
+									break;
+								case "synthesize":
+									// Return immediately with synthesized result
+									return {
+										block: true,
+										reason: "synthesized",
+										synthesizeResult: (anyResult as Record<string, unknown>)
+											.result as ToolCallEventResult["synthesizeResult"],
+										synthesizeIsError: !!anyResult.isError,
+									} as ToolCallEventResult;
+								case "reject":
+									return {
+										block: true,
+										reason:
+											typeof anyResult.reason === "string"
+												? anyResult.reason
+												: "Tool call was rejected by extension",
+									} as ToolCallEventResult;
+							}
+							continue;
 						}
-						continue;
-					}
 
-					// Legacy ToolCallEventResult
-					result = handlerResult as ToolCallEventResult;
-					if (result.block) {
-						return result;
+						// Legacy ToolCallEventResult
+						result = handlerResult as ToolCallEventResult;
+						if (result.block) {
+							return result;
+						}
+					} catch (err) {
+						const message = err instanceof Error ? err.message : String(err);
+						const stack = err instanceof Error ? err.stack : undefined;
+						this.emitError({
+							extensionPath: ext.path,
+							event: eventName,
+							error: message,
+							stack,
+						});
 					}
 				}
 			}

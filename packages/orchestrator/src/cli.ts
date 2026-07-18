@@ -18,7 +18,7 @@ const packageJson = JSON.parse(readFileSync(join(__dirname, "../package.json"), 
 
 function printHelp(): void {
 	console.log(
-		`orchestrator v${packageJson.version}\n\nUsage:\n  orchestrator serve\n  orchestrator list\n  orchestrator spawn [--cwd <path>] [--label <label>]\n  orchestrator status <instance-id>\n  orchestrator stop <instance-id>\n  orchestrator rpc <instance-id> <json-command>\n  orchestrator rpc-stream <instance-id>\n  orchestrator --help\n  orchestrator --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
+		`orchestrator v${packageJson.version}\n\nUsage:\n  orchestrator serve\n  orchestrator list\n  orchestrator spawn [--cwd <path>] [--label <label>] [--provider <name>] [--model <pattern>]\n  orchestrator status <instance-id>\n  orchestrator stop <instance-id>\n  orchestrator rpc <instance-id> <json-command>\n  orchestrator rpc-stream <instance-id>\n  orchestrator --help\n  orchestrator --version\n\nRPC stream stdin expects JSONL RpcCommand or extension_ui_response messages.`,
 	);
 }
 
@@ -70,7 +70,15 @@ async function rpcStream(instanceId: string): Promise<void> {
 			if (!line) {
 				continue;
 			}
-			const parsed = JSON.parse(line) as RpcCommand | RpcExtensionUIResponse;
+			let parsed: RpcCommand | RpcExtensionUIResponse;
+			try {
+				parsed = JSON.parse(line) as RpcCommand | RpcExtensionUIResponse;
+			} catch {
+				// Garbage/non-JSON line on stdin (e.g. pasted text). Skip it
+				// rather than crashing the rpc-stream bridge.
+				console.error(`[orchestrator] skipping non-JSON rpc-stream line: ${line.slice(0, 200)}`);
+				continue;
+			}
 			socket.write(encodeMessage(parsed));
 		}
 	});
@@ -102,7 +110,9 @@ async function main(): Promise<void> {
 	if (args[0] === "spawn") {
 		const spawnCwd = getFlagValue(args, "--cwd") ?? cwd();
 		const label = getFlagValue(args, "--label");
-		printResponse(await sendIpcRequest({ type: "spawn", cwd: spawnCwd, label }));
+		const provider = getFlagValue(args, "--provider");
+		const model = getFlagValue(args, "--model");
+		printResponse(await sendIpcRequest({ type: "spawn", cwd: spawnCwd, label, provider, model }));
 		return;
 	}
 

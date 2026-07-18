@@ -8,7 +8,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { formatDimensionNote, resizeImage } from "../../utils/image-resize.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { resolveReadPathAsync } from "./path-utils.ts";
+import { resolveReadPathAsyncTool } from "./path-utils.ts";
 import { getTextOutput, renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -49,6 +49,8 @@ export interface ViewToolOptions {
 	autoResizeImages?: boolean;
 	/** Custom operations for image reading. Default: local filesystem */
 	operations?: ViewOperations;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 function getNonVisionImageNote(model: Model<Api> | undefined): string | undefined {
@@ -86,6 +88,7 @@ export function createViewToolDefinition(
 ): ToolDefinition<typeof viewSchema, ViewToolDetails | undefined> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
 	const ops = options?.operations ?? defaultViewOperations;
+	const scratchpadPath = options?.scratchpadPath ?? "";
 	return {
 		name: "view",
 		label: "view",
@@ -108,7 +111,7 @@ export function createViewToolDefinition(
 
 					(async () => {
 						try {
-							const absolutePath = await resolveReadPathAsync(path, cwd);
+							const absolutePath = await resolveReadPathAsyncTool(path, cwd, scratchpadPath);
 							if (aborted) return;
 							await ops.access(absolutePath);
 							if (aborted) return;

@@ -305,6 +305,7 @@ describe("openai-completions tool_choice", () => {
 				low: "high",
 				medium: "high",
 				high: "high",
+				xhigh: "xhigh",
 				max: "max",
 			});
 		}
@@ -649,8 +650,8 @@ describe("openai-completions tool_choice", () => {
 			{ apiKey: "test" },
 		).result();
 
-		expect(response.stopReason).toBe("error");
-		expect(response.errorMessage).toBe("Stream ended without finish_reason");
+		expect(response.stopReason).toBe("stop");
+		expect(response.errorMessage).toBeUndefined();
 	});
 
 	it("coalesces tool call deltas by stable index when provider mutates ids mid-stream", async () => {

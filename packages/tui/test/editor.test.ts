@@ -599,7 +599,7 @@ describe("Editor component", () => {
 			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 14 }); // end of line
 
 			// Test forward from start with leading whitespace
-			editor.setText(" foo bar");
+			editor.setText("   foo bar");
 			editor.handleInput("\x01"); // Ctrl+A to go to start
 			editor.handleInput("\x1b[1;5C"); // Ctrl+Right
 			assert.deepStrictEqual(editor.getCursor(), { line: 0, col: 6 }); // after 'foo'
@@ -963,55 +963,55 @@ describe("Editor component", () => {
 		});
 
 		it("keeps word with multi-space and following word together when they fit", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,    consectetur", 30);
 
 			assert.strictEqual(chunks.length, 2);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet,    consectetur");
 		});
 
 		it("keeps word with multi-space and following word when they fill width exactly", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,              consectetur", 30);
 
 			assert.strictEqual(chunks.length, 2);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet,              consectetur");
 		});
 
 		it("splits when word plus multi-space plus word exceeds width", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,               consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, ");
+			assert.strictEqual(chunks[1]!.text, "amet,               ");
 			assert.strictEqual(chunks[2]!.text, "consectetur");
 		});
 
 		it("breaks long whitespace at line boundary", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                         consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, ");
+			assert.strictEqual(chunks[1]!.text, "amet,                         ");
 			assert.strictEqual(chunks[2]!.text, "consectetur");
 		});
 
 		it("breaks long whitespace at line boundary 2", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                          consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, ");
+			assert.strictEqual(chunks[1]!.text, "amet,                         ");
 			assert.strictEqual(chunks[2]!.text, " consectetur");
 		});
 
 		it("breaks whitespace spanning full lines", () => {
-			const chunks = wordWrapLine("Lorem ipsum dolor sit amet, consectetur", 30);
+			const chunks = wordWrapLine("Lorem ipsum dolor sit amet,                                     consectetur", 30);
 
 			assert.strictEqual(chunks.length, 3);
 			assert.strictEqual(chunks[0]!.text, "Lorem ipsum dolor sit ");
-			assert.strictEqual(chunks[1]!.text, "amet, ");
-			assert.strictEqual(chunks[2]!.text, " consectetur");
+			assert.strictEqual(chunks[1]!.text, "amet,                         ");
+			assert.strictEqual(chunks[2]!.text, "            consectetur");
 		});
 
 		it("force-breaks when wide char after word boundary wrap still overflows", () => {
@@ -1595,7 +1595,7 @@ describe("Editor component", () => {
 			editor.handleInput("o");
 			editor.handleInput(" ");
 			editor.handleInput(" ");
-			assert.strictEqual(editor.getText(), "hello ");
+			assert.strictEqual(editor.getText(), "hello  ");
 
 			editor.handleInput("\x1b[45;5u"); // Ctrl+- (undo) - removes second " "
 			assert.strictEqual(editor.getText(), "hello ");

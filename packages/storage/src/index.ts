@@ -1,8 +1,6 @@
 export * from "./config-storage.ts";
 export * from "./global-storage.ts";
 export * from "./log-storage.ts";
-export type { MemoryEntry, MemoryStorageShape } from "./memory-kv.ts";
-export { DEFAULT_MEMORY_CAPACITY, MemoryStorage, makeMemoryStorageLayer } from "./memory-kv.ts";
 export type { MemoryStorage as FileMemoryStorage } from "./memory-storage.ts";
 export { MemoryStorageError, MemoryStorageLive, MemoryStorageTag } from "./memory-storage.ts";
 export * from "./paths.ts";

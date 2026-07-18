@@ -22,4 +22,6 @@ export interface InstanceRecord {
 	sessionId?: string;
 	sessionFile?: string;
 	radiusPiId?: string;
+	provider?: string;
+	model?: string;
 }

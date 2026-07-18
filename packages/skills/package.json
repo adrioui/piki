@@ -24,6 +24,7 @@
 		"node": ">=22.19.0"
 	},
 	"dependencies": {
+		"@piki/event-core": "^0.80.2",
 		"ignore": "7.0.5",
 		"yaml": "2.9.0"
 	},

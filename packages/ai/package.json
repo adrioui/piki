@@ -34,6 +34,10 @@
 		"./bedrock-provider": {
 			"types": "./dist/bedrock-provider.d.ts",
 			"import": "./dist/bedrock-provider.js"
+		},
+		"./prompt/ids": {
+			"types": "./dist/prompt/ids.d.ts",
+			"import": "./dist/prompt/ids.js"
 		}
 	},
 	"files": [

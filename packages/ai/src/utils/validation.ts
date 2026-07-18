@@ -3,6 +3,149 @@ import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
 import type { Tool, ToolCall } from "../types.ts";
 
+/**
+ * Mirror of Magnitude alpha22's `toolfix.go` normalization. Runs *before* the
+ * schema-driven `validateToolArguments` coercion: it repairs model output that
+ * the generic JSON-schema coercion cannot (status-enum synonyms, object-encoded
+ * arrays, required-field injection). This is what lets piki silently survive the
+ * same malformed tool calls that alpha22's proxy repairs.
+ */
+
+/** Per-tool numeric fields that must be coerced from string → number. */
+const TOOLFIX_NUMERIC_FIELDS: Record<string, readonly string[]> = {
+	read: ["offset", "limit"],
+	grep: ["limit"],
+	tree: ["maxDepth"],
+	shell: ["detach_after"],
+	bash: ["detach_after"],
+};
+
+/** Per-tool boolean fields that must be coerced from string → boolean. */
+const TOOLFIX_BOOLEAN_FIELDS: Record<string, readonly string[]> = {
+	edit: ["replaceAll"],
+	tree: ["recursive", "gitignore"],
+	spawn_worker: ["yield"],
+	spawnWorker: ["yield"],
+};
+
+/** Normalizes `update_task.status` synonyms to alpha22's canonical set. */
+function normalizeStatus(value: string): string {
+	switch (value) {
+		case "pending":
+		case "completed":
+		case "cancelled":
+			return value;
+		case "working":
+		case "in_progress":
+		case "active":
+		case "started":
+			return "pending";
+		case "done":
+		case "complete":
+		case "finished":
+			return "completed";
+		case "canceled":
+			return "cancelled";
+		default:
+			return value;
+	}
+}
+
+/**
+ * Repairs models that encode a JSON array as an object with contiguous numeric
+ * string keys (e.g. `{"0":"a","1":"b"}`). Invalid or sparse objects are returned
+ * unchanged so that downstream validation can reject them rather than losing data.
+ */
+function indexedStringObjectToArray(value: unknown): unknown {
+	const obj = value as Record<string, unknown> | undefined;
+	if (typeof obj !== "object" || obj === null || Array.isArray(obj) || Object.keys(obj).length === 0) {
+		return value;
+	}
+	const out: unknown[] = new Array(Object.keys(obj).length);
+	for (let i = 0; i < out.length; i++) {
+		if (!(String(i) in obj)) {
+			return value;
+		}
+		const item = obj[String(i)];
+		if (typeof item !== "string") {
+			return value;
+		}
+		out[i] = item;
+	}
+	return out;
+}
+
+function numericStringToNumber(value: unknown): unknown {
+	if (typeof value !== "string") return value;
+	const trimmed = value.trim();
+	if (trimmed.length >= 15) return value;
+	if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return value;
+	const parsed = Number(trimmed);
+	return Number.isFinite(parsed) ? parsed : value;
+}
+
+function stringToBool(value: unknown): unknown {
+	if (typeof value !== "string") return value;
+	switch (value.trim().toLowerCase()) {
+		case "true":
+			return true;
+		case "false":
+			return false;
+		default:
+			return value;
+	}
+}
+
+/**
+ * Pre-validation coercion matching Magnitude alpha22 `toolfix.go::normalizeToolArgs`.
+ *
+ * Applies toolfix-style repairs on top of whatever the model emitted:
+ * - string → number for known numeric params (offset/limit/maxDepth/detach_after)
+ * - string → bool for known boolean params (replaceAll/recursive/gitignore/yield)
+ * - `update_task.status` synonym normalization
+ * - `compact.files` object-encoded array repair
+ * - `compact.reflection` default injection ("" when absent)
+ *
+ * @param toolName The tool being invoked (wire name, snake or camel case)
+ * @param params   The raw arguments object from the model
+ * @returns A repaired copy of `params` (input is never mutated)
+ */
+export function coerceToolArgs(toolName: string, params: unknown): unknown {
+	if (typeof params !== "object" || params === null || Array.isArray(params)) {
+		return params;
+	}
+	const out: Record<string, unknown> = { ...(params as Record<string, unknown>) };
+
+	for (const field of TOOLFIX_NUMERIC_FIELDS[toolName] ?? []) {
+		if (field in out) {
+			out[field] = numericStringToNumber(out[field]);
+		}
+	}
+	for (const field of TOOLFIX_BOOLEAN_FIELDS[toolName] ?? []) {
+		if (field in out) {
+			out[field] = stringToBool(out[field]);
+		}
+	}
+
+	if (toolName === "update_task" || toolName === "updateTask") {
+		const status = out.status;
+		if (typeof status === "string") {
+			out.status = normalizeStatus(status.trim());
+		}
+	}
+
+	if (toolName === "compact") {
+		if ("files" in out) {
+			out.files = indexedStringObjectToArray(out.files);
+		}
+		if (!("reflection" in out)) {
+			out.reflection = "";
+		}
+	}
+
+	return out;
+}
+
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
 
@@ -278,6 +421,14 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 	const args = structuredClone(toolCall.arguments);
 	Value.Convert(tool.parameters, args);
+
+	// toolfix.go-style repairs (status synonyms, object-encoded arrays, required
+	// field injection) that generic JSON-schema coercion cannot express.
+	const repaired = coerceToolArgs(tool.name, args as Record<string, unknown>);
+	if (repaired !== args) {
+		for (const key of Object.keys(args)) delete args[key];
+		Object.assign(args, repaired);
+	}
 
 	const validator = getValidator(tool.parameters);
 	if (!Object.getOwnPropertySymbols(tool.parameters).includes(TYPEBOX_KIND)) {

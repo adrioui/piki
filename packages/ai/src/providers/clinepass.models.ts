@@ -12,7 +12,7 @@ export const CLINEPASS_MODELS = {
 		baseUrl: "https://api.cline.bot/api/v1",
 		compat: {"requiresReasoningContentOnAssistantMessages":true,"thinkingFormat":"deepseek"},
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":null,"medium":null,"high":"high","xhigh":"max"},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":null,"medium":null,"high":"high","xhigh":"high","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.14,
@@ -31,7 +31,7 @@ export const CLINEPASS_MODELS = {
 		baseUrl: "https://api.cline.bot/api/v1",
 		compat: {"requiresReasoningContentOnAssistantMessages":true,"thinkingFormat":"deepseek"},
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":null,"medium":null,"high":"high","xhigh":"max"},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":null,"medium":null,"high":"high","xhigh":"high","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 1.74,
@@ -49,7 +49,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"max"},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 1.4,
@@ -67,7 +67,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":null,"minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":null,"minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.95,
@@ -85,7 +85,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":null,"minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":null,"minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.95,
@@ -103,7 +103,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.14,
@@ -121,7 +121,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 1.74,
@@ -139,7 +139,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.3,
@@ -157,7 +157,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 2.5,
@@ -175,7 +175,7 @@ export const CLINEPASS_MODELS = {
 		provider: "clinepass",
 		baseUrl: "https://api.cline.bot/api/v1",
 		reasoning: true,
-		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":null},
+		thinkingLevelMap: {"off":"off","minimal":null,"low":"low","medium":"medium","high":"high","xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0.4,

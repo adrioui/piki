@@ -1,5 +1,5 @@
 import { createRoleControlTool } from "./role-control-tool.ts";
 
 export function createKillWorkerToolDefinition() {
-	return createRoleControlTool("killWorker", "Kill a worker agent.");
+	return createRoleControlTool("kill_worker", "Kill a worker agent.");
 }

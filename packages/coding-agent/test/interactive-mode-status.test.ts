@@ -750,8 +750,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- @scope/piki-scoped, answer.ts, cli-extension.ts, HazAT/piki-interactive-subagents, HazAT/piki-interactive-subagents:subagents, local-index, piki-markdown-preview, user-index"`);
+			"[Extensions]
+			  @scope/piki-scoped, answer.ts, cli-extension.ts, HazAT/piki-interactive-subagents, HazAT/piki-interactive-subagents:subagents, local-index, piki-markdown-preview, user-index"
+		`);
 	});
 
 	test("adds more parent folders until local extension labels are unique", () => {
@@ -796,8 +797,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- alpha/one, beta/one, gamma/one"`);
+			"[Extensions]
+			  alpha/one, beta/one, gamma/one"
+		`);
 	});
 
 	test("strips index.ts from local extension label, showing parent dir", () => {
@@ -824,8 +826,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- plan-mode"`);
+			"[Extensions]
+			  plan-mode"
+		`);
 	});
 
 	test("strips index.js from local extension label, showing parent dir", () => {
@@ -852,8 +855,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- plan-mode"`);
+			"[Extensions]
+			  plan-mode"
+		`);
 	});
 
 	test("mixed single-file and subdirectory index.ts extensions strip index.ts", () => {
@@ -889,8 +893,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- plan-mode, webfetch.ts"`);
+			"[Extensions]
+			  plan-mode, webfetch.ts"
+		`);
 	});
 
 	test("multiple index.ts with unique parent dirs need no disambiguation", () => {
@@ -926,8 +931,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- bar, foo"`);
+			"[Extensions]
+			  bar, foo"
+		`);
 	});
 
 	test("multiple index.ts with same parent dir name disambiguated with grandparent", () => {
@@ -963,8 +969,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- alpha/tools, beta/tools"`);
+			"[Extensions]
+			  alpha/tools, beta/tools"
+		`);
 	});
 
 	test("non-index file in subdirectory stays as filename", () => {
@@ -991,8 +998,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- main.ts"`);
+			"[Extensions]
+			  main.ts"
+		`);
 	});
 
 	test("package extensions still strip index.ts correctly (regression guard)", () => {
@@ -1022,8 +1030,9 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- piki-markdown-preview"`);
+			"[Extensions]
+			  piki-markdown-preview"
+		`);
 	});
 	test("captures mixed extension layouts in expanded output", () => {
 		const fakeThis = createShowLoadedResourcesThis({
@@ -1038,21 +1047,22 @@ describe("InteractiveMode.showLoadedResources", () => {
 		});
 
 		expect(normalizeRenderedOutput(fakeThis.loadedResourcesContainer)).toMatchInlineSnapshot(`
-"[Extensions]
- project
- /tmp/project/.piki/extensions/answer.ts
- /tmp/project/.piki/extensions/local-index
- git:github.com/HazAT/piki-interactive-subagents
- extensions
- extensions/subagents
- npm:@scope/piki-scoped
- extensions
- npm:piki-markdown-preview
- extensions
- user
- /tmp/agent/extensions/user-index
- path
- /tmp/temp/cli-extension.ts"`);
+			"[Extensions]
+			  project
+			    /tmp/project/.piki/extensions/answer.ts
+			    /tmp/project/.piki/extensions/local-index
+			    git:github.com/HazAT/piki-interactive-subagents
+			      extensions
+			      extensions/subagents
+			    npm:@scope/piki-scoped
+			      extensions
+			    npm:piki-markdown-preview
+			      extensions
+			  user
+			    /tmp/agent/extensions/user-index
+			  path
+			    /tmp/temp/cli-extension.ts"
+		`);
 	});
 
 	test("shows context paths relative to cwd while preserving full external paths", () => {

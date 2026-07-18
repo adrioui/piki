@@ -85,8 +85,8 @@ describe("regression #3592: no-builtin-tools keeps extension tools enabled", () 
 		expect(allToolNames).toContain("scratchpad_load");
 		expect(allToolNames).toContain("web_search");
 		expect(allToolNames).toContain("web_fetch");
-		expect(allToolNames).toContain("createTask");
-		expect(allToolNames).toContain("finishGoal");
+		expect(allToolNames).toContain("create_task");
+		expect(allToolNames).toContain("finish_goal");
 		// With noTools: "builtin", only extension tools should be active
 		const activeTools = session.getActiveToolNames();
 		expect(activeTools).toContain("dynamic_tool");

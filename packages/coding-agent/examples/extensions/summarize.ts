@@ -1,21 +1,12 @@
 import { complete, getModel } from "@piki/ai/compat";
-import type { ExtensionAPI, ExtensionCommandContext } from "@piki/coding-agent";
-import { DynamicBorder, getMarkdownTheme } from "@piki/coding-agent";
-import { Container, Markdown, matchesKey, Text } from "@piki/tui";
+import type { ExtensionAPI, ExtensionCommandContext, SessionEntry } from "@piki/coding-agent";
+import { Container, Markdown, type MarkdownTheme, matchesKey, Text } from "@piki/tui";
 
 type ContentBlock = {
 	type?: string;
 	text?: string;
 	name?: string;
 	arguments?: Record<string, unknown>;
-};
-
-type SessionEntry = {
-	type: string;
-	message?: {
-		role?: string;
-		content?: unknown;
-	};
 };
 
 const extractTextParts = (content: unknown): string[] => {
@@ -82,7 +73,8 @@ const buildConversationText = (entries: SessionEntry[]): string => {
 		}
 
 		const entryLines: string[] = [];
-		const textParts = extractTextParts(entry.message.content);
+		const content = "content" in entry.message ? entry.message.content : undefined;
+		const textParts = extractTextParts(content);
 		if (textParts.length > 0) {
 			const roleLabel = isUser ? "User" : "Assistant";
 			const messageText = textParts.join("\n").trim();
@@ -92,7 +84,7 @@ const buildConversationText = (entries: SessionEntry[]): string => {
 		}
 
 		if (isAssistant) {
-			entryLines.push(...extractToolCallLines(entry.message.content));
+			entryLines.push(...extractToolCallLines(content));
 		}
 
 		if (entryLines.length > 0) {
@@ -121,8 +113,26 @@ const showSummaryUi = async (summary: string, ctx: ExtensionCommandContext) => {
 
 	await ctx.ui.custom((_tui, theme, _kb, done) => {
 		const container = new Container();
-		const border = new DynamicBorder((s: string) => theme.fg("accent", s));
-		const mdTheme = getMarkdownTheme();
+		const border = {
+			render: (width: number) => [theme.fg("accent", "─".repeat(Math.max(1, width)))],
+			invalidate: () => {},
+		};
+		const mdTheme: MarkdownTheme = {
+			heading: (text) => theme.fg("accent", text),
+			link: (text) => text,
+			linkUrl: (text) => text,
+			code: (text) => text,
+			codeBlock: (text) => text,
+			codeBlockBorder: (text) => text,
+			quote: (text) => text,
+			quoteBorder: (text) => text,
+			hr: (text) => text,
+			listBullet: (text) => text,
+			bold: (text) => theme.bold(text),
+			italic: (text) => text,
+			strikethrough: (text) => text,
+			underline: (text) => text,
+		};
 
 		container.addChild(border);
 		container.addChild(new Text(theme.fg("accent", theme.bold("Conversation Summary")), 1, 0));

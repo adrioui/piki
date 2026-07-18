@@ -77,10 +77,14 @@ function clinePassAuth(): ApiKeyAuth {
 		resolve: async ({ ctx, credential }) => {
 			const credentialKey = credential?.key;
 			if (credentialKey)
-				return { auth: { apiKey: credentialKey, baseUrl: clinePassApiBase() }, source: "stored credential" };
+				return {
+					auth: { apiKey: credentialKey, baseUrl: `${clinePassApiBase()}/api/v1` },
+					source: "stored credential",
+				};
 
 			const envKey = await ctx.env(CLINEPASS_API_KEY_ENV);
-			if (envKey) return { auth: { apiKey: envKey, baseUrl: clinePassApiBase() }, source: CLINEPASS_API_KEY_ENV };
+			if (envKey)
+				return { auth: { apiKey: envKey, baseUrl: `${clinePassApiBase()}/api/v1` }, source: CLINEPASS_API_KEY_ENV };
 
 			const modules = await loadNodeAuthModules();
 			if (!modules) return undefined;
@@ -88,7 +92,7 @@ function clinePassAuth(): ApiKeyAuth {
 			const authPaths = [`${home}/.cline/data/settings/providers.json`, `${home}/.pi/agent/auth.json`];
 			for (const path of authPaths) {
 				const fileKey = await readApiKeyFromFile(modules.fs, path);
-				if (fileKey) return { auth: { apiKey: fileKey, baseUrl: clinePassApiBase() }, source: path };
+				if (fileKey) return { auth: { apiKey: fileKey, baseUrl: `${clinePassApiBase()}/api/v1` }, source: path };
 			}
 			return undefined;
 		},
@@ -128,7 +132,7 @@ function clinePassOAuth(): OAuthAuth {
 		}),
 		toAuth: async (credential: OAuthCredential) => ({
 			apiKey: credential.access,
-			baseUrl: clinePassApiBase(),
+			baseUrl: `${clinePassApiBase()}/api/v1`,
 		}),
 	};
 }

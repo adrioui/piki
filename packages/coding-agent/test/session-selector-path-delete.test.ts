@@ -83,8 +83,32 @@ function createSymlinkedSessionPaths(): {
 	};
 }
 
-const CTRL_D = "\x04";
-const CTRL_BACKSPACE = "\x1b[127;5u";
+/**
+ * Serialize a KeyId (e.g. "alt+x") to the xterm modifyOtherKeys byte
+ * sequence that the tui key matcher accepts. This keeps the tests aligned
+ * with the keybindings defined in src/core/keybindings.ts instead of
+ * hardcoding raw escape bytes that drift when bindings are remapped.
+ */
+function seqFor(keyId: string): string {
+	const parts = keyId.split("+");
+	const key = parts[parts.length - 1]!;
+	let mod = 0;
+	for (const p of parts.slice(0, -1)) {
+		if (p === "shift") mod += 1;
+		else if (p === "alt") mod += 2;
+		else if (p === "ctrl") mod += 4;
+		else if (p === "super") mod += 8;
+	}
+	const codepoint = key === "backspace" ? 127 : key.charCodeAt(0);
+	// modifyOtherKeys wire format: CSI 27 ; (mod+1) ; codepoint ~
+	return `\x1b[27;${mod + 1};${codepoint}~`;
+}
+
+// Resolved key sequences for the delete tests. Assigned in beforeEach
+// where the `keybindings` instance is in scope so they track the
+// current binding defaults.
+let CTRL_D: string;
+let CTRL_BACKSPACE: string;
 
 describe("session selector path/delete interactions", () => {
 	const keybindings = new KeybindingsManager();
@@ -99,6 +123,8 @@ describe("session selector path/delete interactions", () => {
 	beforeEach(() => {
 		// Ensure test isolation: keybindings are a global singleton
 		setKeybindings(new KeybindingsManager());
+		CTRL_D = seqFor(keybindings.getKeys("app.session.delete")[0]!);
+		CTRL_BACKSPACE = seqFor(keybindings.getKeys("app.session.deleteNoninvasive")[0]!);
 	});
 
 	beforeAll(() => {
@@ -129,7 +155,7 @@ describe("session selector path/delete interactions", () => {
 		expect(confirmationChanges).toEqual([]);
 	});
 
-	it("enters confirmation mode on Ctrl+D even with a non-empty search query", async () => {
+	it("enters confirmation mode on the delete key even with a non-empty search query", async () => {
 		const sessions = [makeSession({ id: "a" }), makeSession({ id: "b" })];
 
 		const selector = new SessionSelectorComponent(

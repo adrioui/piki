@@ -10,7 +10,7 @@ export interface AgentModeToolPolicy {
 
 const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
 const PLANNING_TOOLS = [...READ_ONLY_TOOLS] as const;
-const BUILD_TOOLS = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+const BUILD_TOOLS = ["read", "bash", "shell", "edit", "write", "grep", "find", "ls"] as const;
 
 export function isAgentMode(value: string): value is AgentMode {
 	return (AGENT_MODES as readonly string[]).includes(value);

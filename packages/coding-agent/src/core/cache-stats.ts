@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@piki/ai";
+import type { Api, AssistantMessage, Model } from "@piki/ai";
 import type { SessionEntry } from "./session-manager.ts";
 
 /**
@@ -31,7 +31,7 @@ export interface CacheWasteTotals {
 
 /** Minimal pricing lookup, satisfied by ModelRegistry. Cost is $/million tokens. */
 export interface ModelPriceSource {
-	find(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
+	find(provider: string, modelId: string): Model<Api> | undefined;
 }
 
 /** The last request seen by the scan; everything in its prompt should be cached. */

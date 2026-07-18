@@ -9,7 +9,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts"
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
-import { resolveToCwd } from "./path-utils.ts";
+import { resolveToolPath } from "./path-utils.ts";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import {
@@ -32,16 +32,22 @@ const grepSchema = Type.Object({
 	context: Type.Optional(
 		Type.Number({ description: "Number of lines to show before and after each match (default: 0)" }),
 	),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of matches to return (default: 100)" })),
+	limit: Type.Optional(Type.Number({ description: "Maximum number of matches to return (default: 50)" })),
 });
 
 export type GrepToolInput = Static<typeof grepSchema>;
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 50;
 
 export interface GrepToolDetails {
 	truncation?: TruncationResult;
 	matchLimitReached?: number;
 	linesTruncated?: boolean;
+	/**
+	 * Structured mirror of mag's `SearchMatch[]` for programmatic consumers, added as an
+	 * intentional-divergence channel. The model-visible `content` remains plain text.
+	 * Each entry maps to mag's `{ file, match: "<lineNum>|<lineText>" }`.
+	 */
+	matches?: Array<{ file: string; match: string }>;
 }
 
 /**
@@ -106,6 +112,8 @@ function parseRipgrepMatch(line: string): RipgrepJsonMatch | undefined {
 export interface GrepToolOptions {
 	/** Custom operations for grep. Default: local filesystem plus ripgrep */
 	operations?: GrepOperations;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 function formatGrepCall(
@@ -168,6 +176,7 @@ export function createGrepToolDefinition(
 	options?: GrepToolOptions,
 ): ToolDefinition<typeof grepSchema, GrepToolDetails | undefined> {
 	const customOps = options?.operations;
+	const scratchpadPath = options?.scratchpadPath ?? "";
 	return {
 		name: "grep",
 		label: "grep",
@@ -218,7 +227,7 @@ export function createGrepToolDefinition(
 							return;
 						}
 
-						const searchPath = resolveToCwd(searchDir || ".", cwd);
+						const searchPath = resolveToolPath(searchDir || ".", cwd, scratchpadPath);
 						const ops = customOps ?? defaultGrepOperations;
 						let isDirectory: boolean;
 						try {
@@ -376,7 +385,12 @@ export function createGrepToolDefinition(
 							// Apply byte truncation. There is no line limit here because the match limit already capped rows.
 							const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
 							let output = truncation.content;
-							const details: GrepToolDetails = {};
+							const details: GrepToolDetails = {
+								matches: matches.map((match) => ({
+									file: formatPath(match.filePath),
+									match: `${match.lineNumber}|${(match.lineText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "").replace(/\n$/, "")}`,
+								})),
+							};
 							// Build actionable notices for truncation and match limits.
 							const notices: string[] = [];
 							if (matchLimitReached) {

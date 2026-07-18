@@ -20,6 +20,10 @@
 - Fixed Amazon Bedrock requests to use the generic `apiKey` stream option as a Bedrock bearer token.
 - Fixed OpenRouter OpenAI-compatible session IDs to use the `x-session-id` header instead of OpenAI-specific session-affinity fields ([#6366](https://github.com/earendil-works/pi/issues/6366)).
 
+### Removed
+
+- Removed the Sakana AI and Qwen Cloud providers from the model catalog. They had no provider factory and were unreachable at runtime.
+
 ## [0.80.6] - 2026-07-09
 
 ### Added

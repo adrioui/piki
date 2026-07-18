@@ -60,14 +60,22 @@ export class WorkerEffectRuntime {
 	}
 
 	async removeWorker(agentId: string): Promise<void> {
+		let queue: Queue.Queue<string> | undefined;
 		await Effect.runPromise(
 			TSemaphore.withPermit(this.registrySemaphore)(
 				Effect.sync(() => {
+					queue = this.messageQueues.get(agentId);
 					this.messageQueues.delete(agentId);
 					this.fibers.delete(agentId);
 				}),
 			),
 		);
+		// Shut down the queue so any blocked `Queue.take` in drainMessages
+		// unblocks (runPromiseExit turns the shutdown into a Failure exit that
+		// breaks the drain loop). Without this, spawned workers hang forever.
+		if (queue) {
+			await Effect.runPromise(Queue.shutdown(queue));
+		}
 	}
 
 	async dispose(sessions: Iterable<WorkerSession>): Promise<void> {
@@ -78,6 +86,11 @@ export class WorkerEffectRuntime {
 			await Effect.runPromise(Fiber.interrupt(fiber));
 		}
 		this.fibers.clear();
+		// Shut down all message queues so any blocked drainMessages loops unblock
+		// before we drop the references.
+		for (const queue of this.messageQueues.values()) {
+			await Effect.runPromise(Queue.shutdown(queue));
+		}
 		this.messageQueues.clear();
 	}
 }

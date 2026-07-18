@@ -1,9 +1,9 @@
 /**
  * Worker tool registry scoping — filters tools based on ROLE_DEFINITIONS toolkit field.
  *
- * - workerBase: read, bash, edit, write, grep, find, ls, web_search, web_fetch, skill, compact, scratchpad_save, scratchpad_load
+ * - workerBase: read, shell, edit, write, grep, find, ls, web_search, web_fetch, skill, compact, scratchpad_save, scratchpad_load
  * - criticBase: read, grep, find, ls, bash (read-only)
- * - Leader-only tools (spawnWorker, killWorker, etc.) are NOT available to any worker
+ * - Leader-only tools (spawn_worker, kill_worker, etc.) are NOT available to any worker
  */
 
 import { ROLE_DEFINITIONS } from "@piki/event-core";
@@ -11,7 +11,7 @@ import type { WorkerTool } from "./worker-session.ts";
 
 const WORKER_BASE_TOOLS = new Set([
 	"read",
-	"bash",
+	"shell",
 	"edit",
 	"write",
 	"grep",
@@ -23,9 +23,25 @@ const WORKER_BASE_TOOLS = new Set([
 	"compact",
 	"scratchpad_save",
 	"scratchpad_load",
+	"view",
+	"query_image",
+	"checkpoint_changes",
+	"checkpoint_rollback",
 ]);
 
-const CRITIC_BASE_TOOLS = new Set(["read", "grep", "find", "ls", "bash"]);
+const CRITIC_BASE_TOOLS = new Set([
+	"read",
+	"grep",
+	"find",
+	"ls",
+	"shell",
+	"write",
+	"edit",
+	"view",
+	"query_image",
+	"tree",
+	"compact",
+]);
 
 // Observer may only pass or escalate — no filesystem, web, or worker-management tools.
 const OBSERVER_TOOLKIT_TOOLS = new Set(["pass", "escalate"]);
@@ -33,21 +49,21 @@ const OBSERVER_TOOLKIT_TOOLS = new Set(["pass", "escalate"]);
 // Compact role runs its own compaction pipeline; it needs no standard tools.
 const COMPACT_TOOLKIT_TOOLS = new Set<string>();
 
-// `checkpoint_changes` and `restore_snapshot` are also absent from WORKER_BASE_TOOLS.
-// Keeping them here is defense-in-depth if the worker allowlist changes later.
+// `checkpoint_changes` and `checkpoint_rollback` are exposed to workers
+// (alpha22: workers can snapshot/rollback their own changes). They remain in
+// LEADER_ONLY_TOOLS only as a defense-in-depth gate for the observer toolkit.
+
 const LEADER_ONLY_TOOLS = new Set([
-	"spawnWorker",
-	"killWorker",
-	"messageWorker",
-	"reassignWorker",
-	"createTask",
-	"updateTask",
-	"messageAdvisor",
-	"finishGoal",
+	"spawn_worker",
+	"kill_worker",
+	"message_worker",
+	"reassign_worker",
+	"create_task",
+	"update_task",
+	"message_advisor",
+	"finish_goal",
 	"pass",
 	"escalate",
-	"checkpoint_changes",
-	"restore_snapshot",
 ]);
 
 export interface FilterToolsForRoleOptions {
@@ -87,7 +103,7 @@ export function filterToolsForRole(
 }
 
 /** Web-related tool names that require webTools: true */
-const WEB_TOOL_NAMES = new Set(["web_search", "web_fetch"]);
+const WEB_TOOL_NAMES = new Set(["web_search", "web_fetch", "query_image"]);
 
 function isWebTool(toolName: string): boolean {
 	return WEB_TOOL_NAMES.has(toolName);

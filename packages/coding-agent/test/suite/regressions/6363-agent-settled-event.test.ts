@@ -57,7 +57,10 @@ describe("regression #6363: agent settled event and idle waiting", () => {
 
 		expect(harness.eventsOfType("agent_end").map((event) => event.willRetry)).toEqual([true, false]);
 		expect(harness.eventsOfType("agent_settled")).toHaveLength(1);
-		expect(extensionEvents).toEqual(["agent_end", "agent_end", "agent_settled:true"]);
+		// Auto-retry turns are internal continuations; the intermediate agent_end
+		// (willRetry:true) is coalesced and only the final agent_end reaches
+		// extension handlers (see agent-session.ts agent_end handling).
+		expect(extensionEvents).toEqual(["agent_end", "agent_settled:true"]);
 		expect(publicEvents).toEqual(["agent_settled"]);
 	});
 

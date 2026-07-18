@@ -131,7 +131,7 @@ describe("edit tool TUI rendering", () => {
 		const clearsBeforeResult = terminal.fullClearCount;
 		component.updateResult(
 			{
-				content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${filePath}.` }],
+				content: [{ type: "text", text: `Replaced ${edits.length} occurrences in ${filePath}.` }],
 				details: diff,
 				isError: false,
 			},
@@ -184,7 +184,7 @@ describe("edit tool TUI rendering", () => {
 
 		component.updateResult(
 			{
-				content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${filePath}.` }],
+				content: [{ type: "text", text: `Replaced ${edits.length} occurrences in ${filePath}.` }],
 				details: diff,
 				isError: false,
 			},

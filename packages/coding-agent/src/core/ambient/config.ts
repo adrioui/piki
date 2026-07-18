@@ -1,5 +1,8 @@
+import type { Model } from "@piki/ai/compat";
 import { calculateContextCaps, ROLE_DEFINITIONS } from "@piki/event-core";
 import { Effect } from "effect";
+import { AgentModelResolver } from "../agent-model-resolver.ts";
+import type { AgentSessionServices } from "../agent-session-services.ts";
 import { ambientDefine } from "../projection/projection.ts";
 
 /**
@@ -87,6 +90,57 @@ export function buildConfigState(): ConfigState {
  */
 export function getRoleConfig(state: ConfigState, roleId: string): RoleConfig | undefined {
 	return state.byRole[roleId];
+}
+
+/**
+ * Refine an initial {@link ConfigState} against the live model catalog.
+ *
+ * Faithful to alpha22's post-catalog-load refinement (capture 82286–82295):
+ * after the catalog is loaded, each role's per-role profile is replaced with
+ * the resolved model's actual context window / max output tokens, and the
+ * hard/soft caps are recomputed. `catalogLoaded` is set to `true` so callers
+ * can distinguish refined from fallback-only state.
+ *
+ * Profiles are resolved through {@link AgentModelResolver} (same precedence as
+ * worker/leader model selection) so the caps reflect the model that will
+ * actually serve each role, including runtime `roleModels` overrides. Roles
+ * whose resolved model has no `contextWindow`/`maxTokens` keep the fallback
+ * profile (defensive; all catalog models carry both fields).
+ */
+export function refineConfigState(
+	initial: ConfigState,
+	services: AgentSessionServices,
+	overrides: Record<string, string> = {},
+): ConfigState {
+	const byRole: Record<string, RoleConfig> = {};
+	for (const roleId of Object.keys(ROLE_DEFINITIONS)) {
+		const fallback = initial.byRole[roleId];
+		const model = new AgentModelResolver(services, overrides).resolve(roleId);
+		const profile: ModelProfile = model
+			? {
+					contextWindow: model.contextWindow,
+					maxOutputTokens: model.maxTokens,
+					capabilities: profileCapabilities(model),
+				}
+			: fallback.profile;
+		const { hardCap, softCap } = calculateContextCaps(profile.contextWindow);
+		byRole[roleId] = {
+			modelId: model ? `${model.provider}/${model.id}` : fallback.modelId,
+			profile,
+			hardCap,
+			softCap,
+		};
+	}
+	return { ...initial, byRole, catalogLoaded: true };
+}
+
+function profileCapabilities(model: Model<string>): ModelProfile["capabilities"] {
+	const reasoning = model.reasoning ? { type: "model" as const } : { type: "none" as const };
+	return {
+		vision: model.input.includes("image"),
+		grammar: false,
+		reasoning,
+	};
 }
 
 export const ConfigAmbient = ambientDefine<ConfigState>({

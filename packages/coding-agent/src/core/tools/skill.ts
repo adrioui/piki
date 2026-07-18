@@ -24,7 +24,15 @@ export interface SkillToolOptions {
 }
 
 function formatSkillBlock(skill: Skill, body: string): string {
-	return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
+	const markerPattern = /<!--\s*@(shared|lead|worker|handoff)\s*-->/i;
+	const sections = markerPattern.test(body) ? (skill.sections ?? []) : [];
+	const renderedBody =
+		sections.length > 0
+			? sections
+					.map((section) => `## ${section.name[0]!.toUpperCase()}${section.name.slice(1)}\n\n${section.content}`)
+					.join("\n\n")
+			: body;
+	return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${renderedBody}\n</skill>`;
 }
 
 export function createSkillToolDefinition(

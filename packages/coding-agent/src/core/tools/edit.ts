@@ -8,6 +8,7 @@ import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
 import {
 	applyEditsToNormalizedContent,
+	applyFlatReplaceAll,
 	computeEditsDiff,
 	detectLineEnding,
 	type Edit,
@@ -20,7 +21,7 @@ import {
 	stripBom,
 } from "./edit-diff.ts";
 import { withFileMutationQueue } from "./file-mutation-queue.ts";
-import { resolveToCwd } from "./path-utils.ts";
+import { resolveToolPath } from "./path-utils.ts";
 import { renderToolPath, str } from "./render-utils.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
@@ -44,14 +45,23 @@ const replaceEditSchema = Type.Object(
 const editSchema = Type.Object(
 	{
 		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
+		old: Type.String({
+			description:
+				"Exact text to find and replace (alpha22 flat single-edit form). It must match the file exactly, including all whitespace and newlines. To replace multiple disjoint regions in one call, use the `edits` array instead.",
+		}),
+		new: Type.String({ description: "Replacement text for the matched `old` text." }),
+		replaceAll: Type.Optional(
+			Type.Boolean({
+				description:
+					"When true, replaces every occurrence of `old` in the file. When false or omitted, `old` must be unique; the edit fails if it appears more than once.",
+			}),
+		),
 		edits: Type.Optional(
 			Type.Array(replaceEditSchema, {
 				description:
-					"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
+					"Legacy multi-edit form. One or more targeted replacements; each is matched against the original file, not incrementally. Prefer the top-level `old`/`new` unless you need multiple disjoint replacements in a single call. Do not include overlapping or nested edits.",
 			}),
 		),
-		old: Type.Optional(Type.String({ description: "Single edit: exact text to find." })),
-		new: Type.Optional(Type.String({ description: "Single edit: replacement text." })),
 	},
 	{},
 );
@@ -89,6 +99,8 @@ const defaultEditOperations: EditOperations = {
 export interface EditToolOptions {
 	/** Custom operations for file editing. Default: local filesystem */
 	operations?: EditOperations;
+	/** Scratchpad directory, used to resolve $M/ paths with Magnitude-alpha22 parity. */
+	scratchpadPath?: string;
 }
 
 function prepareEditArguments(input: unknown): EditToolInput {
@@ -106,7 +118,14 @@ function prepareEditArguments(input: unknown): EditToolInput {
 		} catch {}
 	}
 
-	// Fold top-level old/new (single-edit form) into edits[]
+	// Coerce replaceAll to a boolean (models sometimes send it as a string)
+	if (args.replaceAll === true || args.replaceAll === "true") {
+		args.replaceAll = true;
+	} else {
+		delete args.replaceAll;
+	}
+
+	// Fold top-level old/new (alpha22 flat single-edit form) into edits[]
 	if (typeof args.old === "string" && typeof args.new === "string") {
 		const edits = Array.isArray(args.edits) ? [...(args.edits as unknown[])] : [];
 		edits.push({ old: args.old, new: args.new });
@@ -118,9 +137,11 @@ function prepareEditArguments(input: unknown): EditToolInput {
 	return args as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] } {
+function validateEditInput(input: EditToolInput): { path: string; edits: Edit[]; replaceAll?: boolean } {
 	if (!Array.isArray(input.edits) || input.edits.length === 0) {
-		throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+		throw new Error(
+			"Edit tool input is invalid. Provide `old`/`new` for a single replacement, or `edits` with at least one entry.",
+		);
 	}
 	const edits: Edit[] = input.edits.map((entry) => {
 		const e = entry as Record<string, unknown>;
@@ -131,7 +152,7 @@ function validateEditInput(input: EditToolInput): { path: string; edits: Edit[] 
 		}
 		return { old, new: new_ };
 	});
-	return { path: input.path, edits };
+	return { path: input.path, edits, replaceAll: input.replaceAll };
 }
 
 type RenderableEditEntry = { old?: string; new?: string };
@@ -303,21 +324,20 @@ export function createEditToolDefinition(
 	options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails | undefined, EditRenderState> {
 	const ops = options?.operations ?? defaultEditOperations;
+	const scratchpadPath = options?.scratchpadPath ?? "";
 	return {
 		name: "edit",
 		label: "edit",
 		description:
-			"Edit a single file using exact text replacement. Every edits[].old must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
-		promptSnippet:
-			"Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+			"Edit a single file using exact text replacement. Provide `old` (exact text to find) and `new` (replacement text). By default `old` must be unique; set `replaceAll: true` to replace every occurrence. To change multiple disjoint regions in one call, pass the `edits` array instead.",
+		promptSnippet: "Make precise file edits with exact text replacement (old/new, or multiple edits in one call)",
 		promptGuidelines: [
 			"Read the file (or the relevant region) before editing so old matches exactly.",
 			"Use edit for precise changes; use write only for new files or full rewrites.",
-			"Each edits[].old must match the original file exactly. Do not include leading/trailing whitespace you did not see; preserve the file's indentation and line endings.",
-			"Keep edits[].old as small as possible while still being unique in the file. Do not pad with large unchanged regions just to connect distant changes.",
+			"`old` must match the original file exactly. Do not include leading/trailing whitespace you did not see; preserve the file's indentation and line endings.",
+			"Keep `old` as small as possible while still being unique in the file. Do not pad with large unchanged regions just to connect distant changes.",
 			"For repeated/near-identical blocks (e.g. several list items, similar JSX nodes), include enough unique surrounding lines to disambiguate which occurrence you mean.",
-			"When changing multiple separate locations in one file, use one edit call with multiple entries in edits[] instead of multiple edit calls.",
-			"Each edits[].old is matched against the original file, not after earlier edits are applied. Do not emit overlapping or nested edits. Merge nearby changes into one edit.",
+			"When changing multiple separate locations in one file at once, set `replaceAll: true` (if every occurrence is identical) or pass multiple entries in the `edits` array instead of making multiple edit calls. Do not emit overlapping or nested edits; merge nearby changes into one edit.",
 			"If an edit fails, re-read the relevant region before retrying. Do not retry identical arguments blindly.",
 			"After every edit, re-read the changed region (or the full file if small) and confirm the change landed as intended.",
 		],
@@ -329,7 +349,7 @@ export function createEditToolDefinition(
 				const typedInput = input as Partial<EditToolInput>;
 				if (typeof typedInput?.path !== "string" || typedInput.path.length === 0) return;
 				try {
-					const absolutePath = resolveToCwd(typedInput.path, cwd);
+					const absolutePath = resolveToolPath(typedInput.path, cwd, scratchpadPath);
 					ops.access(absolutePath);
 				} catch {
 					throw new Error(`File not found: ${typedInput.path}`);
@@ -339,8 +359,8 @@ export function createEditToolDefinition(
 		emissionSchema: undefined,
 		errorSchema: undefined,
 		async execute(_toolCallId, input: EditToolInput, signal?: AbortSignal, _onUpdate?, _ctx?) {
-			const { path, edits } = validateEditInput(input);
-			const absolutePath = resolveToCwd(path, cwd);
+			const { path, edits, replaceAll } = validateEditInput(input);
+			const absolutePath = resolveToolPath(path, cwd, scratchpadPath);
 
 			return withFileMutationQueue(absolutePath, async () => {
 				// Do not reject from an abort event listener here: that would release the
@@ -373,7 +393,13 @@ export function createEditToolDefinition(
 				const { bom, text: content } = stripBom(rawContent);
 				const originalEnding = detectLineEnding(content);
 				const normalizedContent = normalizeToLF(content);
-				const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
+
+				// Alpha22 flat form: a single old/new with replaceAll. Use split/join
+				// semantics (replace every occurrence) instead of the unique-match path.
+				const flatSingle = replaceAll && edits.length === 1 && typeof edits[0].new === "string";
+				const { baseContent, newContent } = flatSingle
+					? applyFlatReplaceAll(normalizedContent, edits[0], path)
+					: applyEditsToNormalizedContent(normalizedContent, edits, path);
 				throwIfAborted();
 
 				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
@@ -382,13 +408,26 @@ export function createEditToolDefinition(
 
 				const diffResult = generateDiffString(baseContent, newContent);
 				const patch = generateUnifiedPatch(path, baseContent, newContent);
+
+				// Mirror Magnitude alpha22's edit-tool success wording. Derive the
+				// counts from the applied content so multi-occurrence (`replaceAll`)
+				// and pure-delete edits are reported faithfully.
+				const removedLines = edits.reduce((sum, e) => sum + e.old.split("\n").length, 0);
+				const addedLines = edits.reduce((sum, e) => sum + e.new.split("\n").length, 0);
+				const replacedCount = flatSingle
+					? normalizedContent.split(normalizeToLF(edits[0]!.old)).length - 1
+					: edits.length;
+				let editText: string;
+				if (replacedCount > 1) {
+					editText = `Replaced ${replacedCount} occurrences in ${path}`;
+				} else if (addedLines === 0 && removedLines > 0) {
+					editText = `Deleted ${removedLines} line(s) from ${path}`;
+				} else {
+					editText = `Replaced ${removedLines} line(s) with ${addedLines} line(s) in ${path}`;
+				}
+
 				return {
-					content: [
-						{
-							type: "text",
-							text: `Successfully replaced ${edits.length} block(s) in ${path}.`,
-						},
-					],
+					content: [{ type: "text", text: editText }],
 					details: { diff: diffResult.diff, patch, firstChangedLine: diffResult.firstChangedLine },
 				};
 			});
@@ -410,12 +449,14 @@ export function createEditToolDefinition(
 			if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
 				component.previewPending = true;
 				const requestKey = argsKey;
-				void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {
-					if (component.previewArgsKey === requestKey) {
-						setEditPreview(component, preview, requestKey);
-						context.invalidate();
-					}
-				});
+				void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, scratchpadPath).then(
+					(preview) => {
+						if (component.previewArgsKey === requestKey) {
+							setEditPreview(component, preview, requestKey);
+							context.invalidate();
+						}
+					},
+				);
 			}
 
 			return buildEditCallComponent(component, args, theme, context.cwd);

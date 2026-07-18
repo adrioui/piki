@@ -2,9 +2,14 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed orphaned Effect worker/projection engine not driven by the production path: `workers/*` (cortex, turn-controller, autopilot, chat-title, lifecycle-coordinator, file-mention-resolver, agent-lifecycle, atif-writer), `execution/execution-manager.ts`, `projections/*` (agent-routing, agent-status, chat-title, compaction, conversation, goal, session-context, user-message-resolution, turn, window-projection, atif/*), and `runtime/*` (worker-bus, trace). Kept `projections/task-worker.ts`, `outbound-messages.ts`, `worker-activity.ts` and `roles/task-worker-role.ts` (live via `session-orchestrator.ts`). ([wave2-plan-orphaned](scratchpad/reports/wave2-plan-orphaned.md))
+
 ### Added
 
 - Added `AgentToolResult.addedToolNames` propagation to `ToolResultMessage` so tools introduced by a result can be loaded from that transcript point onward ([#6474](https://github.com/earendil-works/pi-mono/pull/6474)).
+- Added per-tool execution timeouts and structured tool-error classification. `AgentLoopConfig.toolTimeout` and `AgentOptions.toolTimeout` resolve a per-call deadline (ms) enforced via `AbortSignal`; `tool-errors.ts` classifies failures into timeout/permission/filesystem/network/invalid_args/aborted/unknown categories with retryable hints surfaced to the model and to `ErrorRepeatGuard`.
 
 ## [0.80.6] - 2026-07-09
 

@@ -12,7 +12,7 @@ import {
 	ROLE_DEFINITIONS,
 	type RoleDef,
 } from "@piki/event-core";
-import type { Skill } from "./skills.ts";
+import type { Skill } from "@piki/skills";
 
 // Re-export the event-core helper for convenience
 export { getRoleContextLens } from "@piki/event-core";

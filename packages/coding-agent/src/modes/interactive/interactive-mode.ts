@@ -17,6 +17,7 @@ import {
 	type OAuthProviderId,
 	type OAuthSelectPrompt,
 } from "@piki/ai/compat";
+import { ROLE_DEFINITIONS } from "@piki/event-core";
 import type {
 	AutocompleteItem,
 	AutocompleteProvider,
@@ -2682,9 +2683,9 @@ export class InteractiveMode {
 				return;
 			}
 			if (text === "/model" || text.startsWith("/model ")) {
-				const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
+				const args = text.startsWith("/model ") ? text.slice(7).trim() : "";
 				this.editor.setText("");
-				await this.handleModelCommand(searchTerm);
+				await this.handleModelCommand(args);
 				return;
 			}
 			if (text === "/export" || text.startsWith("/export ")) {
@@ -3231,6 +3232,7 @@ export class InteractiveMode {
 						{
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
+							scratchpadPath: this.session.scratchpad.getRootDir(),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -4537,28 +4539,82 @@ export class InteractiveMode {
 		});
 	}
 
-	private async handleModelCommand(searchTerm?: string): Promise<void> {
-		if (!searchTerm) {
+	private async handleModelCommand(args: string): Promise<void> {
+		if (!args) {
 			this.showModelSelector();
 			return;
 		}
 
-		const model = await this.findExactModelMatch(searchTerm);
-		if (model) {
+		const tokens = args.split(/\s+/).filter((t) => t.length > 0);
+		if (tokens.length === 1) {
+			// Single arg: set the leader model (current behavior).
+			const model = await this.findExactModelMatch(tokens[0]);
+			if (model) {
+				try {
+					await this.session.setModel(model);
+					this.footer.invalidate();
+					this.updateEditorBorderColor();
+					this.showStatus(`Model: ${model.id}`);
+					void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+					this.checkDaxnutsEasterEgg(model);
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			this.showModelSelector(tokens[0]);
+			return;
+		}
+
+		if (tokens.length === 2) {
+			const [role, modelRef] = tokens;
+			if (!ROLE_DEFINITIONS[role]) {
+				this.showError(`Unknown role: ${role}`);
+				return;
+			}
+			// /model leader <model> routes to setModel (single source of truth for leader).
+			if (role === "leader") {
+				const model = await this.findExactModelMatch(modelRef);
+				if (model) {
+					try {
+						await this.session.setModel(model);
+						this.footer.invalidate();
+						this.updateEditorBorderColor();
+						this.showStatus(`Model: ${model.id}`);
+						void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
+						this.checkDaxnutsEasterEgg(model);
+					} catch (error) {
+						this.showError(error instanceof Error ? error.message : String(error));
+					}
+				} else {
+					this.showModelSelector(modelRef);
+				}
+				return;
+			}
+			if (modelRef === "reset") {
+				try {
+					this.session.resetRoleModel(role);
+					this.showStatus(`${role} model reset to default`);
+				} catch (error) {
+					this.showError(error instanceof Error ? error.message : String(error));
+				}
+				return;
+			}
+			const model = await this.findExactModelMatch(modelRef);
+			if (!model) {
+				this.showModelSelector(modelRef);
+				return;
+			}
 			try {
-				await this.session.setModel(model);
-				this.footer.invalidate();
-				this.updateEditorBorderColor();
-				this.showStatus(`Model: ${model.id}`);
-				void this.maybeWarnAboutAnthropicSubscriptionAuth(model);
-				this.checkDaxnutsEasterEgg(model);
+				this.session.setRoleModel(role, model);
+				this.showStatus(`${role} model: ${model.id}`);
 			} catch (error) {
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
 			return;
 		}
 
-		this.showModelSelector(searchTerm);
+		this.showError("Usage: /model [<role>] <provider/model> | /model <role> reset");
 	}
 
 	private async findExactModelMatch(searchTerm: string): Promise<Model<any> | undefined> {

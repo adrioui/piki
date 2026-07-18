@@ -124,7 +124,7 @@ describe("generateSummary reasoning options", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
+			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000, keepRatio: 0.1 },
 		};
 
 		await compact(preparation, createModel(false, 128000), "test-key");

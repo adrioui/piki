@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { getRoleContextLens, ROLE_DEFINITIONS } from "@piki/event-core";
 import ignore from "ignore";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
@@ -73,7 +74,24 @@ export interface SkillFrontmatter {
 	roles?: string[];
 	/** Roles excluded from seeing this skill. */
 	"exclude-roles"?: string[];
+	/**
+	 * Optional thinking lens hints (alpha22 parity). Each entry describes a
+	 * reasoning lens the worker should apply. Stored as structured data; the
+	 * skill body's `<!-- @... -->` sections are the primary carrier, this is
+	 * additive metadata.
+	 */
+	thinking?: Array<{ lens: string; trigger?: string; description?: string }>;
 	[key: string]: unknown;
+}
+
+/** Section markers parsed from a skill body (alpha22 parity). */
+export type SkillSectionName = "shared" | "lead" | "worker" | "handoff";
+
+export interface SkillSection {
+	/** Section name (marker). Unmarked body is stored under "shared". */
+	name: SkillSectionName;
+	/** The section body text (trimmed). */
+	content: string;
 }
 
 export interface Skill {
@@ -87,6 +105,16 @@ export interface Skill {
 	roles: string[];
 	/** Roles excluded from seeing this skill. */
 	excludeRoles: string[];
+	/**
+	 * Role-targeted sections split from the body via `<!-- @shared -->`,
+	 * `<!-- @lead -->`, `<!-- @worker -->`, `<!-- @handoff -->` markers.
+	 * When the body has no markers, a single "shared" section holds the whole
+	 * body (backward compatible). Undefined for skills loaded before section
+	 * parsing existed.
+	 */
+	sections?: SkillSection[];
+	/** Thinking lens hints from frontmatter, if any. */
+	thinkingLenses?: Array<{ lens: string; trigger?: string; description?: string }>;
 }
 
 export interface LoadSkillsResult {
@@ -283,6 +311,57 @@ function loadSkillsFromDirInternal(
 	return { skills, diagnostics };
 }
 
+const SKILL_SECTION_MARKER = /<!--\s*@(shared|lead|worker|handoff)\s*-->/gi;
+
+/**
+ * Split a skill body into role-targeted sections using `<!-- @shared -->`,
+ * `<!-- @lead -->`, `<!-- @worker -->`, `<!-- @handoff -->` markers (alpha22
+ * parity). A body with no markers yields a single "shared" section holding the
+ * entire body, preserving backward compatibility for unmarked skills.
+ */
+export function parseSkillSections(body: string): SkillSection[] {
+	const markers: { index: number; name: SkillSectionName; length: number }[] = [];
+	SKILL_SECTION_MARKER.lastIndex = 0;
+	let match = SKILL_SECTION_MARKER.exec(body);
+	while (match !== null) {
+		markers.push({
+			index: match.index,
+			name: match[1]!.toLowerCase() as SkillSectionName,
+			length: match[0].length,
+		});
+		match = SKILL_SECTION_MARKER.exec(body);
+	}
+
+	if (markers.length === 0) {
+		const trimmed = body.trim();
+		return trimmed ? [{ name: "shared", content: trimmed }] : [];
+	}
+
+	const sections: SkillSection[] = [];
+	// mag parity: text before the first marker (preamble) is folded into the
+	// "shared" section rather than dropped.
+	const preamble = body.slice(0, markers[0]!.index).trim();
+	if (preamble.length > 0) {
+		sections.push({ name: "shared", content: preamble });
+	}
+	for (let i = 0; i < markers.length; i++) {
+		const start = markers[i]!.index + markers[i]!.length;
+		const end = i + 1 < markers.length ? markers[i + 1]!.index : body.length;
+		const content = body.slice(start, end).trim();
+		if (content.length > 0) {
+			// Collapse consecutive "shared" segments (preamble + explicit marker)
+			// the way mag joins them with a blank line.
+			const prev = sections[sections.length - 1];
+			if (prev && prev.name === markers[i]!.name) {
+				prev.content = `${prev.content}\n\n${content}`;
+			} else {
+				sections.push({ name: markers[i]!.name, content });
+			}
+		}
+	}
+	return sections;
+}
+
 function loadSkillFromFile(
 	filePath: string,
 	source: string,
@@ -325,6 +404,18 @@ function loadSkillFromFile(
 				disableModelInvocation: frontmatter["disable-model-invocation"] === true,
 				roles: Array.isArray(frontmatter.roles) ? frontmatter.roles : [],
 				excludeRoles: Array.isArray(frontmatter["exclude-roles"]) ? frontmatter["exclude-roles"] : [],
+				sections: parseSkillSections(rawContent),
+				thinkingLenses: Array.isArray(frontmatter.thinking)
+					? frontmatter.thinking.map((lens) => ({
+							lens: String((lens as { lens?: unknown })?.lens ?? ""),
+							trigger: (lens as { trigger?: unknown })?.trigger
+								? String((lens as { trigger?: unknown }).trigger)
+								: undefined,
+							description: (lens as { description?: unknown })?.description
+								? String((lens as { description?: unknown }).description)
+								: undefined,
+						}))
+					: [],
 			},
 			diagnostics,
 		};
@@ -346,13 +437,64 @@ function loadSkillFromFile(
 export interface FormatSkillsForPromptOptions {
 	/** Role to filter skills for. If provided, applies role-specific visibility rules. */
 	role?: SkillFilterRole;
+	/**
+	 * Role-lens override (visibleSkills/excludedSkills). When provided, these
+	 * take precedence over any lens derived from `role`. Mirrors the
+	 * `contextLens` on a RoleDef in `@piki/event-core`.
+	 */
+	visibleSkills?: string[];
+	excludedSkills?: string[];
+}
+
+/**
+ * A role context lens controlling which skills are visible.
+ * Mirrors `ContextLens` from `@piki/event-core`.
+ */
+export interface SkillFilterLens {
+	visibleSkills: string[];
+	excludedSkills: string[];
 }
 
 /**
  * A role identifier that can be used for skill filtering.
- * Can be a RoleDef object or a role name string.
+ * Can be a role name string, a `{ name: string }` object, or any object
+ * carrying a `name: string` field (e.g. a RoleDef from `@piki/event-core`).
  */
 export type SkillFilterRole = { name: string } | string;
+
+function roleNameOf(role: SkillFilterRole | undefined): string | undefined {
+	if (role === undefined) return undefined;
+	return typeof role === "string" ? role : role.name;
+}
+
+/**
+ * Resolve the lens to apply for a formatting request.
+ *
+ * Precedence:
+ * 1. Explicit `visibleSkills`/`excludedSkills` options, if provided.
+ * 2. The role's context lens from `@piki/event-core` (when `role` names a
+ *    known role).
+ * 3. Empty lens (no filtering beyond skill-level frontmatter).
+ */
+function resolveLens(options: FormatSkillsForPromptOptions): SkillFilterLens {
+	if (options.visibleSkills || options.excludedSkills) {
+		return {
+			visibleSkills: options.visibleSkills ?? [],
+			excludedSkills: options.excludedSkills ?? [],
+		};
+	}
+
+	if (options.role) {
+		const roleName = roleNameOf(options.role);
+		const roleDef = roleName ? ROLE_DEFINITIONS[roleName] : undefined;
+		if (roleDef) {
+			const lens = getRoleContextLens(roleDef);
+			return { visibleSkills: lens.visibleSkills, excludedSkills: lens.excludedSkills };
+		}
+	}
+
+	return { visibleSkills: [], excludedSkills: [] };
+}
 
 /**
  * Format skills for inclusion in a system prompt.
@@ -362,26 +504,39 @@ export type SkillFilterRole = { name: string } | string;
  * Skills with disableModelInvocation=true are excluded from the prompt
  * (they can only be invoked explicitly via /skill:name commands).
  *
- * If a role is provided, skills are filtered based on the role's context lens.
+ * If a role or lens is provided, skills are filtered based on the role's
+ * context lens (visibleSkills/excludedSkills) as well as skill-level
+ * `roles`/`exclude-roles` frontmatter.
  */
 export function formatSkillsForPrompt(skills: Skill[], options: FormatSkillsForPromptOptions = {}): string {
 	let visibleSkills = skills.filter((s) => !s.disableModelInvocation);
 
-	// Note: role-based filtering is handled by the consumer (coding-agent/role-context.ts)
-	// which has access to event-core role definitions. Here we just apply the SkillFilterRole
-	// interface if it provides a name.
-	if (options.role) {
-		const roleName = typeof options.role === "string" ? options.role : options.role.name;
-		visibleSkills = visibleSkills.filter((skill) => {
-			if (skill.excludeRoles.length > 0 && skill.excludeRoles.includes(roleName)) {
-				return false;
-			}
-			if (skill.roles.length > 0 && !skill.roles.includes(roleName)) {
-				return false;
-			}
-			return true;
-		});
-	}
+	const { visibleSkills: lensVisible, excludedSkills: lensExcluded } = resolveLens(options);
+	const roleName = options.role ? roleNameOf(options.role) : undefined;
+
+	visibleSkills = visibleSkills.filter((skill) => {
+		// Role-lens: always exclude explicitly excluded skills
+		if (lensExcluded.length > 0 && lensExcluded.includes(skill.name)) {
+			return false;
+		}
+
+		// Role-lens: if a visibility allowlist is set, only those skills show
+		if (lensVisible.length > 0) {
+			return lensVisible.includes(skill.name);
+		}
+
+		// Skill-level exclude-roles frontmatter
+		if (roleName && skill.excludeRoles.length > 0 && skill.excludeRoles.includes(roleName)) {
+			return false;
+		}
+
+		// Skill-level roles allowlist frontmatter
+		if (roleName && skill.roles.length > 0 && !skill.roles.includes(roleName)) {
+			return false;
+		}
+
+		return true;
+	});
 
 	if (visibleSkills.length === 0) {
 		return "";
@@ -508,8 +663,13 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		for (const root of findWorkspaceSkillRoots(resolvedCwd, ".claude/skills")) {
 			addSkills(loadSkillsFromDirInternal(root, "project", true));
 		}
+		// Magnitude-compatible discovery roots (superset of the Claude/Agents roots).
+		for (const root of findWorkspaceSkillRoots(resolvedCwd, ".magnitude/skills")) {
+			addSkills(loadSkillsFromDirInternal(root, "project", true));
+		}
 		addSkills(loadSkillsFromDirInternal(resolve(homedir(), ".config", "agents", "skills"), "user", true));
 		addSkills(loadSkillsFromDirInternal(resolve(homedir(), ".claude", "skills"), "user", true));
+		addSkills(loadSkillsFromDirInternal(resolve(homedir(), ".magnitude", "skills"), "user", true));
 	}
 
 	const userSkillsDir = join(resolvedAgentDir, "skills");

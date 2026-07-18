@@ -19,6 +19,9 @@ export function detectSupportedImageMimeType(buffer: Uint8Array): string | null 
 	if (startsWithAscii(buffer, 0, "BM") && isBmp(buffer)) {
 		return "image/bmp";
 	}
+	if (isSvg(buffer)) {
+		return "image/svg+xml";
+	}
 	return null;
 }
 
@@ -52,6 +55,14 @@ function isAnimatedPng(buffer: Uint8Array): boolean {
 		offset = nextOffset;
 	}
 	return false;
+}
+
+function isSvg(buffer: Uint8Array): boolean {
+	const text = Buffer.from(buffer)
+		.toString("utf8")
+		.replace(/^\uFEFF/, "")
+		.trimStart();
+	return text.startsWith("<?xml") || text.startsWith("<svg") || text.startsWith("<svg ") || text.startsWith("<svg>");
 }
 
 function isBmp(buffer: Uint8Array): boolean {

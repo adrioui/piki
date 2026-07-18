@@ -60,8 +60,8 @@ describe("regression #5109: exclude tools", () => {
 			expect(activeTools).toContain("scratchpad_load");
 			expect(activeTools).toContain("web_search");
 			expect(activeTools).toContain("web_fetch");
-			expect(activeTools).toContain("createTask");
-			expect(activeTools).toContain("finishGoal");
+			expect(activeTools).toContain("create_task");
+			expect(activeTools).toContain("finish_goal");
 			expect(activeTools).not.toContain("read");
 			expect(activeTools).not.toContain("ask_question");
 			expect(harness.session.systemPrompt).not.toContain("- read:");

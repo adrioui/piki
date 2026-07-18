@@ -157,9 +157,10 @@ describe("harness compaction", () => {
 			enabled: true,
 			reserveTokens: 10000,
 			keepRecentTokens: 20000,
+			keepRatio: 0.1,
 		};
 		expect(shouldCompact(95000, 100000, settings)).toBe(true);
-		expect(shouldCompact(89000, 100000, settings)).toBe(false);
+		expect(shouldCompact(80000, 100000, settings)).toBe(false);
 		expect(shouldCompact(95000, 100000, { ...settings, enabled: false })).toBe(false);
 	});
 
@@ -382,6 +383,7 @@ describe("harness compaction", () => {
 				enabled: true,
 				reserveTokens: 100,
 				keepRecentTokens: 1,
+				keepRatio: 0.1,
 			}),
 		);
 
@@ -417,6 +419,7 @@ describe("harness compaction", () => {
 				enabled: true,
 				reserveTokens: 100,
 				keepRecentTokens: 1,
+				keepRatio: 0.1,
 			}),
 		);
 
@@ -543,7 +546,7 @@ describe("harness compaction", () => {
 			isSplitTurn: true,
 			tokensBefore: 600000,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000 },
+			settings: { enabled: true, reserveTokens: 500000, keepRecentTokens: 20000, keepRatio: 0.1 },
 		};
 
 		getOrThrow(await compact(preparation, models, model));
@@ -560,7 +563,7 @@ describe("harness compaction", () => {
 			isSplitTurn: false,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20, keepRatio: 0.1 },
 		};
 		const { faux: historyFaux, model: historyModel } = createFauxModel(false);
 		historyFaux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "history failed" })]);
@@ -595,7 +598,7 @@ describe("harness compaction", () => {
 			isSplitTurn: true,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20, keepRatio: 0.1 },
 		};
 
 		getOrThrow(await compact(preparation, models, model, undefined, undefined, "high"));
@@ -612,7 +615,7 @@ describe("harness compaction", () => {
 			isSplitTurn: true,
 			tokensBefore: 100,
 			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20 },
+			settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 20, keepRatio: 0.1 },
 		};
 		const { faux, model } = createFauxModel(false);
 		faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: "prefix failed" })]);

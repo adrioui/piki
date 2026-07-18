@@ -8,6 +8,15 @@
 import type { AgentMessage, StreamFn, ThinkingLevel } from "@piki/agent-core";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions, Usage } from "@piki/ai/compat";
 import { completeSimple } from "@piki/ai/compat";
+import {
+	COMPACT_MAX_FILE_CHARS,
+	COMPACT_MAX_FILES,
+	calculateContextCaps,
+	KEEP_MESSAGE_RATIO,
+	OUTPUT_TOKEN_RESERVE,
+} from "@piki/event-core";
+import { readFileSync } from "fs";
+import { resolvePath } from "../../utils/paths.ts";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionContext,
@@ -25,14 +34,36 @@ import {
 	serializeConversation,
 } from "./utils.ts";
 
-// ============================================================================
-// File Operation Tracking
-// ============================================================================
+export const COMPACTION_REFLECTION_PROMPT = `--- CONVERSATION END ---
+--- COMPACTION ---
+
+<system>
+The conversation is out of context. Your sole purpose now is to compact the conversation into a summary, reflection, and key files.
+
+FROM THIS POINT FORWARD, YOU ARE NO LONGER MAGNITUDE. YOU ARE A COMPACTOR.
+YOU ARE NO LONGER INTERACTING WITH THE USER.
+YOU HAVE EXACTLY ONE TURN TO PERFORM COMPACTION
+YOU MUST NOT THINK, MESSAGE, OR USE ANY TOOLS OTHER THAN \`compact\` FOR ANY REASON.
+YOU MAY NOT READ FILES, RUN SHELL COMMANDS, OR ANY OTHER TOOLS TO ATTEMPT TO GATHER ADDITIONAL INFORMATION BEFORE COMPACTING, BECAUSE YOU HAVE ONLY ONE TURN.
+ANY ATTEMPT TO CALL A TOOL BESIDES COMPACT THIS TURN WILL RESULT IN COMPACTION FAILURE.
+FAILURE TO CALL COMPACT THIS TURN WILL RESULT IN COMPACTION FAILURE.
+
+THIS TURN, YOU MUST:
+(1) Avoid thinking for very long, and avoid sending a long message.
+(2) Call EXACTLY ONE TOOL: \`compact\`, and call NO OTHER TOOLS
+
+These are the parameters to the compact tool that you must provide this turn:
+- **summary**: What happened in this conversation — decisions made, work completed, current state, user instructions and preferences, work in progress. Write enough that your future self can continue without re-reading the conversation. Be specific: file paths, function names, error messages, architectural decisions, user requirements. Include anything your future self would need to look up again if omitted.
+- **reflection**: What went wrong, incorrect assumptions, approaches that failed, what to do differently. Not what happened — what your future self should change. Name the reasoning traps so your future self avoids them. If nothing went wrong, say so briefly.
+- **files** (optional): Array of file paths to read and preserve verbatim in your future context. Use this for source code you're actively editing, configuration files, or any content that cannot survive summarization. The tool will read these files for you — just provide the paths. Max 10 files. The tool will enforce a token budget and truncate if necessary.
+</system>`;
 
 /** Details stored in CompactionEntry.details for file tracking */
 export interface CompactionDetails {
 	readFiles: string[];
 	modifiedFiles: string[];
+	/** File contents explicitly preserved by the compaction tool, when available. */
+	files?: Array<{ path: string; content: string }>;
 }
 
 /**
@@ -69,6 +100,44 @@ function extractFileOperations(
 }
 
 // ============================================================================
+// Key-file inlining
+// ============================================================================
+
+/**
+ * Inline preserved file contents into a `## Key Files` markdown section, so the
+ * model keeps the bodies of files it reasoned over after their paths are
+ * compacted away. Files are read from disk relative to `cwd` (the session
+ * working directory). Read failures are skipped silently.
+ */
+export async function buildKeyFilesSection(
+	fileOps: FileOperations,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	const paths = [...new Set([...fileOps.read, ...fileOps.edited, ...fileOps.written])].sort();
+	if (paths.length === 0) return "";
+
+	const limited = paths.slice(0, COMPACT_MAX_FILES);
+	const blocks: string[] = ["## Key Files"];
+
+	for (const filePath of limited) {
+		if (signal?.aborted) break;
+		const resolved = resolvePath(filePath, cwd);
+		let contents: string;
+		try {
+			contents = readFileSync(resolved, "utf-8");
+		} catch {
+			continue;
+		}
+		const truncated = contents.length > COMPACT_MAX_FILE_CHARS ? contents.slice(0, COMPACT_MAX_FILE_CHARS) : contents;
+		blocks.push(`### ${filePath}\n\`\`\`\n${truncated}\n\`\`\``);
+	}
+
+	if (blocks.length === 1) return "";
+	return `\n\n${blocks.join("\n\n")}`;
+}
+
+// ============================================================================
 // Message Extraction
 // ============================================================================
 
@@ -100,16 +169,37 @@ export interface CompactionResult<T = unknown> {
 export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
-	keepRecentTokens: number;
+	keepRecentTokens?: number;
 	continuationCharThreshold?: number;
+	/** Fraction of the soft cap retained as recent context. Mirrors alpha22's KEEP_MESSAGE_RATIO. */
+	keepRatio: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
-	reserveTokens: 16384,
-	keepRecentTokens: 20000,
+	reserveTokens: OUTPUT_TOKEN_RESERVE,
+	keepRatio: KEEP_MESSAGE_RATIO,
 	continuationCharThreshold: 100000,
 };
+
+/**
+ * Hard ceiling on a single auto-compaction's wall-clock time. A hung
+ * summarization call (provider never resolving) would otherwise wedge the
+ * session's compaction path forever — as happened in mrkkpimo's 8th compaction.
+ * After this timeout we abort and degrade to the extractive tail-keep fallback.
+ */
+export const COMPACTION_TIMEOUT_MS = 60_000;
+
+/**
+ * Scale the token-free continuation-char threshold to the model's context window.
+ * A fixed 100k chars (~25k tokens) is meaningless at a 1M window. We scale
+ * proportionally to the window so the char-based fallback floor tracks window size.
+ */
+export function computeContinuationCharThreshold(contextWindow?: number): number {
+	const chars = (contextWindow ?? 200_000) * 4; // ~4 chars/token
+	const scaled = Math.floor((chars - 8192 * 4) * 0.9);
+	return Math.max(100_000, scaled);
+}
 
 // ============================================================================
 // Token calculation
@@ -161,6 +251,11 @@ export interface ContextUsageEstimate {
 	usageTokens: number;
 	trailingTokens: number;
 	lastUsageIndex: number | null;
+	/** How the estimate was derived: "usage" when a provider usage block was
+	 * available, "heuristic" when the whole history was guessed via chars/4.
+	 * Callers must treat a heuristic estimate as an upper bound, never as a
+	 * precise trigger. */
+	source: "usage" | "heuristic";
 }
 
 function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
@@ -188,6 +283,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 			usageTokens: 0,
 			trailingTokens: estimated,
 			lastUsageIndex: null,
+			source: "heuristic",
 		};
 	}
 
@@ -202,6 +298,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 		usageTokens,
 		trailingTokens,
 		lastUsageIndex: usageInfo.index,
+		source: "usage",
 	};
 }
 
@@ -220,10 +317,27 @@ export function estimateContextChars(messages: AgentMessage[]): number {
 
 /**
  * Check if compaction should trigger based on context usage.
+ * Trigger threshold is the alpha22 `softCap` = min(0.9*(contextWindow-8192), 200000),
+ * with `reserveTokens` as a floor so the summary always fits.
  */
+export function computeSoftCap(contextWindow: number): number {
+	const { softCap } = calculateContextCaps(contextWindow);
+	return softCap;
+}
+
+/** Recent-context token budget retained after compaction (`keepRatio * softCap`). */
+export function computeKeepRecentTokens(contextWindow: number, settings: CompactionSettings): number {
+	if (settings.keepRecentTokens && settings.keepRecentTokens > 0) {
+		return settings.keepRecentTokens;
+	}
+	return Math.max(0, Math.floor(computeSoftCap(contextWindow) * settings.keepRatio));
+}
+
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	const softCap = computeSoftCap(contextWindow);
+	const threshold = Math.min(softCap, contextWindow - settings.reserveTokens);
+	return contextTokens > threshold;
 }
 
 // ============================================================================
@@ -453,78 +567,87 @@ export function findCutPoint(
 // Summarization
 // ============================================================================
 
-export const CONTINUATION_RESUME_PROMPT = `The messages above are a conversation to summarize. Create a structured continuation summary that will allow another LLM to resume the work efficiently after the conversation history is replaced with this summary.
+const SUMMARIZATION_PROMPT = `The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
 
 Use this EXACT format:
 
-## Task Overview
-- [The user's core request and success criteria]
-- [Clarifications, constraints, and user-specified priorities]
+## Goal
+[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
 
-## Current State
-- [What has been completed so far]
-- [Files created, modified, or analyzed, with exact paths]
-- [Key outputs, artifacts, or validation results produced]
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
 
-## Important Discoveries
-- [Technical constraints or requirements uncovered]
-- [Decisions made and rationale]
-- [Errors encountered and how they were resolved]
-- [Approaches tried that did not work, including why]
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+### Blocked
+- [Issues preventing progress, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Reflection
+- [What went wrong, failed attempts, or dead ends encountered]
+- [What to avoid repeating]
+- [Misunderstandings or course corrections made]
+- [Or "(none)" if the work proceeded without notable issues]
 
 ## Next Steps
-1. [Specific action needed next]
-2. [Continue in priority order]
+1. [Ordered list of what should happen next]
 
-## Context to Preserve
-- [User preferences or style requirements]
-- [Domain-specific details that are not obvious]
-- [Promises made to the user]
-- [Blockers, open questions, and external constraints]
+## Critical Context
+- [Any data, examples, or references needed to continue]
+- [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
-Rules for accuracy:
-- Do not mark work as done unless the conversation shows it completed successfully.
-- Preserve failed attempts, negative results, rejected approaches, and blockers so the next model does not repeat them.
-- Preserve exact validation commands and outcomes, including failures and skipped checks.`;
-
-const SUMMARIZATION_PROMPT = CONTINUATION_RESUME_PROMPT;
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
-Update the existing structured continuation summary with new information. RULES:
+Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
 - ADD new progress, decisions, and context from the new messages
-- UPDATE Current State and Next Steps based on what was accomplished
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
 - If something is no longer relevant, you may remove it
 
 Use this EXACT format:
 
-## Task Overview
-- [Preserve existing goals and success criteria, add new ones if task expanded]
-- [Preserve constraints and user-specified priorities]
+## Goal
+[Preserve existing goals, add new ones if the task expanded]
 
-## Current State
-- [Previously completed work and newly completed work]
-- [Files created, modified, or analyzed, with exact paths]
-- [Key outputs, artifacts, or validation results produced]
+## Constraints & Preferences
+- [Preserve existing, add new ones discovered]
 
-## Important Discoveries
-- [Preserve technical constraints, decisions, rationale, errors, resolved issues, failed attempts, and negative results]
+## Progress
+### Done
+- [x] [Include previously done items AND newly completed items]
+
+### In Progress
+- [ ] [Current work - update based on progress]
+
+### Blocked
+- [Current blockers - remove if resolved]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale] (preserve all previous, add new)
+
+## Reflection
+- [New failures, dead ends, or course corrections discovered in the new messages]
+- [Preserve previous reflection content; add or update as needed]
 
 ## Next Steps
-1. [Update based on current state, in priority order]
+1. [Update based on current state]
 
-## Context to Preserve
-- [Preserve preferences, domain details, promises, blockers, open questions, and external constraints]
+## Critical Context
+- [Preserve important context, add new if needed]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
-Rules for accuracy:
-- Do not mark work as done unless the new conversation confirms it completed successfully.
-- Preserve failed attempts, negative results, rejected approaches, and blockers from both old and new context.
-- Preserve exact validation commands and outcomes, including failures and skipped checks.`;
+Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
 function createSummarizationOptions(
 	model: Model<any>,
@@ -649,6 +772,7 @@ export interface CompactionPreparation {
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	contextWindow?: number,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -674,7 +798,12 @@ export function prepareCompaction(
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
 
-	const cutPoint = findCutPoint(pathEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const cutPoint = findCutPoint(
+		pathEntries,
+		boundaryStart,
+		boundaryEnd,
+		contextWindow ? computeKeepRecentTokens(contextWindow, settings) : (settings.keepRecentTokens ?? 20000),
+	);
 
 	// Get UUID of first kept entry
 	const firstKeptEntry = pathEntries[cutPoint.firstKeptEntryIndex];
@@ -831,6 +960,13 @@ export async function compact(
 	// Compute file lists and append to summary
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
+
+	// Always inline key file contents so the model retains bodies of files it
+	// reasoned over after their paths are compacted away. mag inlines key
+	// files unconditionally; the previous `if (env)` gate skipped inlining on
+	// the host-side path, diverging from that behavior.
+	const keyFiles = await buildKeyFilesSection(fileOps, process.cwd(), signal);
+	if (keyFiles) summary += keyFiles;
 
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no UUID - session may need migration");

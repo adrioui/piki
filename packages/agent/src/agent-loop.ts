@@ -3,6 +3,7 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 
+import { coerceToolArgs } from "@piki/ai";
 import {
 	type AssistantMessage,
 	type Context,
@@ -11,6 +12,12 @@ import {
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@piki/ai/compat";
+import {
+	classifyToolError,
+	createClassifiedToolResult,
+	createTimeoutToolResult,
+	ToolTimeoutError,
+} from "./tool-errors.ts";
 import type {
 	AgentContext,
 	AgentEvent,
@@ -512,7 +519,7 @@ function parseWorkerSpecToolCall(
 	obj: Record<string, unknown>,
 	toolNames: Set<string>,
 ): { name: string; arguments: Record<string, unknown> } | undefined {
-	if (!toolNames.has("spawnWorker")) return undefined;
+	if (!toolNames.has("spawn_worker")) return undefined;
 	const worker = obj.worker;
 	if (!worker || typeof worker !== "object" || Array.isArray(worker)) return undefined;
 	const workerObj = worker as Record<string, unknown>;
@@ -525,7 +532,7 @@ function parseWorkerSpecToolCall(
 	if (typeof workerObj.taskId === "string") {
 		args.taskId = workerObj.taskId;
 	}
-	return { name: "spawnWorker", arguments: args };
+	return { name: "spawn_worker", arguments: args };
 }
 
 function normalizeToolCallArguments(value: unknown): Record<string, unknown> | undefined {
@@ -627,7 +634,7 @@ async function executeToolCallsSequential(
 				isError: preparation.isError,
 			};
 		} else {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, signal, emit, config.toolTimeout?.(toolCall.name));
 			finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -689,7 +696,7 @@ async function executeToolCallsParallel(
 		}
 
 		finalizedCalls.push(async () => {
-			const executed = await executePreparedToolCall(preparation, signal, emit);
+			const executed = await executePreparedToolCall(preparation, signal, emit, config.toolTimeout?.(toolCall.name));
 			const finalized = await finalizeExecutedToolCall(
 				currentContext,
 				assistantMessage,
@@ -784,7 +791,16 @@ async function prepareToolCall(
 
 	try {
 		const preparedToolCall = prepareToolCallArguments(tool, toolCall);
-		const validatedArgs = validateToolArguments(tool, preparedToolCall);
+		// Explicit tool-argument coercion before strict TypeBox validation. This is
+		// idempotent (validateToolArguments also coerces internally), so re-running
+		// on already-coerced args is a no-op. It makes intent visible and guarantees
+		// coercion runs on the live path (leader and every worker) even if the
+		// internal coercion in validateToolArguments is later refactored.
+		const coercedArgs = coerceToolArgs(tool.name, preparedToolCall.arguments as Record<string, unknown>);
+		const validatedArgs = validateToolArguments(tool, {
+			...preparedToolCall,
+			arguments: coercedArgs as Record<string, any>,
+		});
 		if (config.beforeToolCall) {
 			const beforeResult = await config.beforeToolCall(
 				{
@@ -843,15 +859,32 @@ async function executePreparedToolCall(
 	prepared: PreparedToolCall,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	toolTimeoutMs: number | undefined,
 ): Promise<ExecutedToolCallOutcome> {
 	const updateEvents: Promise<void>[] = [];
 	let acceptingUpdates = true;
+
+	// Per-tool execution timeout: enforce a deadline by aborting the tool.
+	// Reuses the existing abort mechanism; tools that honor `signal` are
+	// cancelled automatically. This is a safety net for tools that provide no
+	// native timeout (e.g. a hung shell command).
+	let timeoutId: ReturnType<typeof setTimeout> | undefined;
+	let timedOutMs: number | undefined;
+	const timeoutAbort = new AbortController();
+	const onTimeout = () => {
+		timedOutMs = toolTimeoutMs;
+		timeoutAbort.abort();
+	};
+	if (toolTimeoutMs !== undefined) {
+		timeoutId = setTimeout(onTimeout, toolTimeoutMs);
+	}
+	const combinedSignal = combineSignals(signal, timeoutAbort.signal);
 
 	try {
 		const result = await prepared.tool.execute(
 			prepared.toolCall.id,
 			prepared.args as never,
-			signal,
+			combinedSignal,
 			(partialResult) => {
 				if (!acceptingUpdates) return;
 				updateEvents.push(
@@ -869,15 +902,22 @@ async function executePreparedToolCall(
 		);
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
+		if (timedOutMs !== undefined) {
+			// Tool resolved after the deadline fired; treat as a timeout.
+			return { result: createTimeoutToolResult(prepared.toolCall.name, timedOutMs), isError: true };
+		}
 		return { result, isError: false };
 	} catch (error) {
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
-		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
-			isError: true,
-		};
+		if (timedOutMs !== undefined || error instanceof ToolTimeoutError) {
+			const ms = timedOutMs ?? (error instanceof ToolTimeoutError ? error.timedOutMs : (toolTimeoutMs ?? 0));
+			return { result: createTimeoutToolResult(prepared.toolCall.name, ms), isError: true };
+		}
+		const classified = classifyToolError(error, { toolName: prepared.toolCall.name });
+		return { result: createClassifiedToolResult(classified), isError: true };
 	} finally {
+		if (timeoutId !== undefined) clearTimeout(timeoutId);
 		acceptingUpdates = false;
 	}
 }
@@ -933,6 +973,29 @@ function createErrorToolResult(message: string): AgentToolResult<any> {
 		content: [{ type: "text", text: message }],
 		details: {},
 	};
+}
+
+/**
+ * Combine a caller-provided abort signal with the per-tool timeout signal.
+ * Fires as soon as either aborts. Returns the caller signal when no timeout
+ * applies (so the timeout controller is never created for nothing).
+ */
+function combineSignals(callerSignal: AbortSignal | undefined, timeoutSignal: AbortSignal): AbortSignal {
+	if (!callerSignal) {
+		return timeoutSignal;
+	}
+	if (callerSignal === timeoutSignal) {
+		return callerSignal;
+	}
+	if (typeof AbortSignal.any === "function") {
+		return AbortSignal.any([callerSignal, timeoutSignal]);
+	}
+	// Fallback for runtimes without AbortSignal.any.
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	callerSignal.addEventListener("abort", abort, { once: true });
+	timeoutSignal.addEventListener("abort", abort, { once: true });
+	return controller.signal;
 }
 
 async function emitToolExecutionEnd(finalized: FinalizedToolCallOutcome, emit: AgentEventSink): Promise<void> {

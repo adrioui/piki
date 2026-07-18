@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import { setKeybindings, visibleWidth } from "@piki/tui";
+import { getKeybindings, setKeybindings, visibleWidth } from "@piki/tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type {
@@ -15,9 +15,38 @@ beforeAll(() => {
 	initTheme("dark");
 });
 
+/**
+ * Serialize a KeyId (e.g. "ctrl+shift+l") to the xterm modifyOtherKeys
+ * byte sequence that the tui key matcher accepts. This keeps the tests
+ * aligned with the keybindings defined in src/core/keybindings.ts instead of
+ * hardcoding raw escape bytes that drift when bindings are remapped.
+ */
+function seqFor(keyId: string): string {
+	const parts = keyId.split("+");
+	const key = parts[parts.length - 1]!;
+	let mod = 0;
+	for (const p of parts.slice(0, -1)) {
+		if (p === "shift") mod += 1;
+		else if (p === "alt") mod += 2;
+		else if (p === "ctrl") mod += 4;
+		else if (p === "super") mod += 8;
+	}
+	const codepoint = key === "backspace" ? 127 : key.charCodeAt(0);
+	// modifyOtherKeys wire format: CSI 27 ; (mod+1) ; codepoint ~
+	return `\x1b[27;${mod + 1};${codepoint}~`;
+}
+
+// Resolved key sequences for the tree filters under test. Assigned in
+// beforeEach after the global keybindings singleton is reset so they track
+// the current binding defaults.
+let LABELED_ONLY: string;
+let FILTER_DEFAULT: string;
+
 beforeEach(() => {
 	// Ensure test isolation: keybindings are a global singleton
 	setKeybindings(new KeybindingsManager());
+	LABELED_ONLY = seqFor(getKeybindings().getKeys("app.tree.filter.labeledOnly")[0]!);
+	FILTER_DEFAULT = seqFor(getKeybindings().getKeys("app.tree.filter.default")[0]!);
 });
 
 // Helper to create a user message entry
@@ -244,7 +273,7 @@ describe("TreeSelectorComponent", () => {
 
 			// Switch back to default - should stay on user-2
 			// (since that's what we navigated to via parent traversal)
-			selector.handleInput("\x04"); // Ctrl+D
+			selector.handleInput(FILTER_DEFAULT); // default filter
 			expect(list.getSelectedNode()?.entry.id).toBe("user-2");
 		});
 	});
@@ -348,13 +377,13 @@ describe("TreeSelectorComponent", () => {
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-2");
 
 			// Switch to labeled-only filter (no labels exist, so empty result)
-			selector.handleInput("\x0c"); // Ctrl+L
+			selector.handleInput(LABELED_ONLY); // labeled-only filter
 
 			// The list should be empty, getSelectedNode returns undefined
 			expect(list.getSelectedNode()).toBeUndefined();
 
 			// Switch back to default filter
-			selector.handleInput("\x04"); // Ctrl+D
+			selector.handleInput(FILTER_DEFAULT); // default filter
 
 			// Should restore to asst-2 (the selection before we switched to empty filter)
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-2");
@@ -376,18 +405,18 @@ describe("TreeSelectorComponent", () => {
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-1");
 
 			// Switch to labeled-only (empty) - Ctrl+L toggles labeled ↔ default
-			selector.handleInput("\x0c"); // Ctrl+L -> labeled-only
+			selector.handleInput(LABELED_ONLY); // labeled-only filter -> labeled-only
 			expect(list.getSelectedNode()).toBeUndefined();
 
 			// Switch to default, then back to labeled-only
-			selector.handleInput("\x0c"); // Ctrl+L -> default (toggle back)
+			selector.handleInput(LABELED_ONLY); // labeled-only filter -> default (toggle back)
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-1");
 
-			selector.handleInput("\x0c"); // Ctrl+L -> labeled-only again
+			selector.handleInput(LABELED_ONLY); // labeled-only filter -> labeled-only again
 			expect(list.getSelectedNode()).toBeUndefined();
 
 			// Switch back to default with Ctrl+D
-			selector.handleInput("\x04"); // Ctrl+D
+			selector.handleInput(FILTER_DEFAULT); // default filter
 			expect(list.getSelectedNode()?.entry.id).toBe("asst-1");
 		});
 	});
@@ -684,7 +713,7 @@ describe("TreeSelectorComponent", () => {
 			selector.handleInput(CTRL_LEFT); // fold user-3a
 
 			selector.handleInput("\x15"); // ctrl+u: user-only filter resets folds
-			selector.handleInput("\x04"); // ctrl+d: back to default
+			selector.handleInput(FILTER_DEFAULT); // default filter
 
 			// Navigate to user-3a to verify fold was reset
 			let currentId = "";

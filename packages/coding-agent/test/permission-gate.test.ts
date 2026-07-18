@@ -77,11 +77,47 @@ describe("permission-gate", () => {
 			expect(decision.action).toBe("allow");
 		});
 
-		it("allows normal git commands via bash", () => {
-			for (const command of ["git commit -m test", "git push origin main", "git merge feature", "git rebase main"]) {
+		it("allows normal git commands whose subcommand is read-only via bash", () => {
+			for (const command of ["git status", "git log", "git diff", "git show HEAD", "git rev-parse HEAD"]) {
 				const decision = evaluatePermission("bash", { command }, { interactive: false });
 				expect(decision.permitted).toBe(true);
 				expect(decision.action).toBe("allow");
+			}
+		});
+
+		it("denies mutating git subcommands via bash", () => {
+			for (const command of ["git commit -m test", "git push origin main", "git merge feature", "git rebase main"]) {
+				const decision = evaluatePermission("bash", { command }, { interactive: false });
+				expect(decision.permitted).toBe(false);
+				expect(decision.action).toBe("reject");
+				expect(decision.reason).toBe("Only read-only git commands are allowed");
+			}
+		});
+
+		it("allows read-only git with global flags via bash", () => {
+			for (const command of [
+				"git -C /tmp/repo status",
+				"git -C/tmp/repo status",
+				"git --git-dir=/tmp/repo/.git status",
+				"git --work-tree=/tmp/repo diff",
+			]) {
+				const decision = evaluatePermission("bash", { command }, { interactive: false });
+				expect(decision.permitted).toBe(true);
+				expect(decision.action).toBe("allow");
+			}
+		});
+
+		it("still rejects mutating git with global flags via bash", () => {
+			for (const command of ["git -C /tmp/repo reset --hard HEAD", "git -c user.name=x commit -m wip"]) {
+				const decision = evaluatePermission("bash", { command }, { interactive: false });
+				expect(decision.permitted).toBe(false);
+				expect(decision.action).toBe("reject");
+				// `git reset --hard` is forbidden-tier (specific reason); `git -c ...`
+				// uses config/execution-affecting flags (specific reason). Neither
+				// routes through the generic denyMutatingGit rule. Both DENY, matching mag.
+				expect(decision.reason).toMatch(
+					/git reset --hard can discard uncommitted changes|git command uses config or execution-affecting flags/,
+				);
 			}
 		});
 

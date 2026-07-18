@@ -128,10 +128,10 @@ describe("serve", () => {
 		it("returns health status", async () => {
 			const result = await fetchJSON(`http://127.0.0.1:${port}/health`);
 			expect(result.status).toBe(200);
-			const data = result.data as { status: string; timestamp: string; version: string };
+			const data = result.data as { status: string; sessions: number };
 			expect(data.status).toBe("ok");
-			expect(data.timestamp).toBeDefined();
-			expect(data.version).toBeDefined();
+			expect(data.sessions).toBeDefined();
+			expect(typeof data.sessions).toBe("number");
 		});
 	});
 

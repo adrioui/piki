@@ -19,6 +19,7 @@ import { join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
+import { atomicWriteSync, stringifyValidated } from "../utils/atomic-write.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import {
 	type BashExecutionMessage,
@@ -49,11 +50,15 @@ export interface SessionEntryBase {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	/** Runtime fork id this entry belongs to; omitted for the leader (root fork). */
+	forkId?: string | null;
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
 	type: "message";
 	message: AgentMessage;
+	/** True when this assistant message represents a failed/empty LLM call. */
+	llmFailed?: boolean;
 }
 
 export interface ThinkingLevelChangeEntry extends SessionEntryBase {
@@ -118,6 +123,35 @@ export interface SessionInfoEntry extends SessionEntryBase {
 }
 
 /**
+ * Observer assessment entry emitted by the session orchestrator's observer role.
+ * Carries the escalate/justification signals piki actually produces (no mag-only
+ * fields like reasoning/observedTurnId/observerTurnId/chainId). Does NOT
+ * participate in LLM context.
+ */
+export interface ObserverEntry extends SessionEntryBase {
+	type: "observer";
+	escalate: boolean;
+	justification?: string;
+	message: string;
+}
+
+/**
+ * Interrupt entry emitted when an agent/session is interrupted (e.g. user abort
+ * or overthinking steer). Mirrors mag alpha22's `interruptToStep`, which emits a
+ * `source:"user"` step with `extra:{forkId, allKilled}`. Does NOT participate in
+ * LLM context (ignored by buildSessionContext, like ObserverEntry).
+ */
+export interface InterruptEntry extends SessionEntryBase {
+	type: "interrupt";
+	/** alpha22 fork id this interrupt was scoped to (null for the root fork). */
+	forkId: string | null;
+	/** alpha22 sets this when the interruption killed every agent. */
+	allKilled: boolean;
+	/** alpha22 message: "All agents interrupted" when allKilled, else "Agent interrupted". */
+	message: string;
+}
+
+/**
  * Custom message entry for extensions to inject messages into LLM context.
  * Use customType to identify your extension's entries.
  *
@@ -147,7 +181,9 @@ export type SessionEntry =
 	| CustomEntry
 	| CustomMessageEntry
 	| LabelEntry
-	| SessionInfoEntry;
+	| SessionInfoEntry
+	| ObserverEntry
+	| InterruptEntry;
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
@@ -197,6 +233,8 @@ export interface SessionMeta {
 	initialVersion?: string;
 	lastActiveVersion?: string;
 	allMessagesText?: string;
+	/** Currently selected branch leaf id; null/undefined means default (last physical entry). */
+	leafId?: string | null;
 }
 
 export type ReadonlySessionManager = Pick<
@@ -622,7 +660,7 @@ function extractTextContent(message: Message): string {
 		.join(" ");
 }
 
-function sidecarPathForSessionFile(filePath: string, suffix: string): string {
+export function sidecarPathForSessionFile(filePath: string, suffix: string): string {
 	return filePath.endsWith(".jsonl") ? filePath.slice(0, -".jsonl".length) + suffix : `${filePath}${suffix}`;
 }
 
@@ -777,7 +815,7 @@ function readSessionMeta(filePath: string): SessionMeta | undefined {
 
 function writeSessionMeta(filePath: string, meta: SessionMeta): void {
 	try {
-		writeFileSync(sidecarPathForSessionFile(filePath, ".meta.json"), `${JSON.stringify(meta, null, 2)}\n`);
+		atomicWriteSync(sidecarPathForSessionFile(filePath, ".meta.json"), stringifyValidated(meta));
 	} catch {
 		// Metadata is an optimization sidecar; session JSONL remains authoritative.
 	}
@@ -931,6 +969,14 @@ export class SessionManager {
 
 			this._buildIndex();
 			this.flushed = true;
+
+			// Restore the persisted branch leaf so a selected earlier branch
+			// survives a restart. Falls back to the reconstructed default when
+			// the stored leaf no longer resolves (e.g. after compaction/edits).
+			const restored = readSessionMeta(this.sessionFile);
+			if (restored?.leafId && this.byId.has(restored.leafId)) {
+				this.leafId = restored.leafId;
+			}
 		} else {
 			const explicitPath = this.sessionFile;
 			this._newSession(undefined, explicitPath);
@@ -995,14 +1041,8 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
-		try {
-			for (const entry of this.fileEntries) {
-				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
-			}
-		} finally {
-			closeSync(fd);
-		}
+		const content = this.fileEntries.map((entry) => `${JSON.stringify(entry)}\n`).join("");
+		atomicWriteSync(this.sessionFile, content);
 		this.writeMetaSidecar();
 	}
 
@@ -1032,6 +1072,10 @@ export class SessionManager {
 
 	getSessionMetaFile(): string | undefined {
 		return this.createSidecarPath(".meta.json");
+	}
+
+	getSessionRuntimeMetaFile(): string | undefined {
+		return this.createSidecarPath(".runtime-meta.json");
 	}
 
 	getSessionEventsFile(): string | undefined {
@@ -1111,6 +1155,7 @@ export class SessionManager {
 			initialVersion: String(header.version ?? 1),
 			lastActiveVersion: String(CURRENT_SESSION_VERSION),
 			allMessagesText: allMessages.join(" "),
+			leafId: this.leafId,
 		};
 	}
 
@@ -1127,14 +1172,23 @@ export class SessionManager {
 	 * so it is easier to find them.
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
-	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+	appendMessage(message: Message | CustomMessage | BashExecutionMessage, options?: { llmFailed?: boolean }): string {
+		// Preserve the message's own timestamp so the session 'modified' time reflects
+		// the actual message instant rather than the (later) append flush time.
+		const msgTimestamp = (message as { timestamp?: number }).timestamp;
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
 			parentId: this.leafId,
-			timestamp: new Date().toISOString(),
+			timestamp:
+				typeof msgTimestamp === "number" && Number.isFinite(msgTimestamp)
+					? new Date(msgTimestamp).toISOString()
+					: new Date().toISOString(),
 			message,
 		};
+		if (options?.llmFailed === true) {
+			entry.llmFailed = true;
+		}
 		this._appendEntry(entry);
 		return entry.id;
 	}
@@ -1212,6 +1266,43 @@ export class SessionManager {
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 			name: sanitizedName,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/** Append an observer assessment entry (emitted by the orchestrator's observer role). Returns entry id. */
+	appendObserver(escalate: boolean, justification: string | undefined, message: string): string {
+		const entry: ObserverEntry = {
+			type: "observer",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			escalate,
+			justification,
+			message,
+		};
+		this._appendEntry(entry);
+		return entry.id;
+	}
+
+	/**
+	 * Append an interrupt entry (mirrors mag alpha22 `interruptToStep`). Returns entry id.
+	 * Emitted when an agent/session is interrupted so the ATIF alpha22 export can
+	 * reproduce mag's `source:"user"` interrupt step. `forkId` is the alpha22 fork
+	 * id this interrupt was scoped to (null for the root fork); `allKilled` marks a
+	 * full interruption. The step message mirrors mag: "All agents interrupted"
+	 * when allKilled, else "Agent interrupted".
+	 */
+	appendInterrupt(forkId: string | null, allKilled: boolean, message?: string): string {
+		const entry: InterruptEntry = {
+			type: "interrupt",
+			id: generateId(this.byId),
+			parentId: this.leafId,
+			timestamp: new Date().toISOString(),
+			forkId,
+			allKilled,
+			message: message ?? (allKilled ? "All agents interrupted" : "Agent interrupted"),
 		};
 		this._appendEntry(entry);
 		return entry.id;
@@ -1433,6 +1524,7 @@ export class SessionManager {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
 		this.leafId = branchFromId;
+		this.writeMetaSidecar();
 	}
 
 	/**
@@ -1442,6 +1534,7 @@ export class SessionManager {
 	 */
 	resetLeaf(): void {
 		this.leafId = null;
+		this.writeMetaSidecar();
 	}
 
 	/**

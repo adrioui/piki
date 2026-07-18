@@ -508,4 +508,143 @@ describe("SettingsManager", () => {
 			expect(manager.getShellPath()).toBe(homedir());
 		});
 	});
+
+	describe("local settings layer", () => {
+		it("should merge .piki/settings.local.json on top of global settings", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			writeFileSync(join(projectDir, ".piki", "settings.local.json"), JSON.stringify({ theme: "local-theme" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getThemeSetting()).toBe("local-theme");
+		});
+
+		it("should let local override a nested object field from global", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ compaction: { reserveTokens: 16384 } }));
+			writeFileSync(
+				join(projectDir, ".piki", "settings.local.json"),
+				JSON.stringify({ compaction: { reserveTokens: 8192 } }),
+			);
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getCompactionReserveTokens()).toBe(8192);
+		});
+
+		it("should give local highest priority over project and global", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "global-theme" }));
+			writeFileSync(join(projectDir, ".piki", "settings.json"), JSON.stringify({ theme: "project-theme" }));
+			writeFileSync(join(projectDir, ".piki", "settings.local.json"), JSON.stringify({ theme: "local-theme" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+
+			expect(manager.getThemeSetting()).toBe("local-theme");
+		});
+
+		it("should re-read local overrides after reload()", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const localPath = join(projectDir, ".piki", "settings.local.json");
+			writeFileSync(localPath, JSON.stringify({ theme: "first" }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getThemeSetting()).toBe("first");
+
+			writeFileSync(localPath, JSON.stringify({ theme: "second" }));
+			await manager.reload();
+
+			expect(manager.getThemeSetting()).toBe("second");
+		});
+
+		it("should treat local layer as read-only (save does not clobber it)", async () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const localPath = join(projectDir, ".piki", "settings.local.json");
+			writeFileSync(localPath, JSON.stringify({ tasteOnboarding: { completed: true } }));
+
+			const manager = SettingsManager.create(projectDir, agentDir);
+			// Mutate an unrelated global setting and flush.
+			manager.setTheme("light");
+			await manager.flush();
+
+			// The local file must be untouched (still only the tasteOnboarding key).
+			const local = JSON.parse(readFileSync(localPath, "utf-8"));
+			expect(local).toEqual({ tasteOnboarding: { completed: true } });
+		});
+	});
+
+	describe("getPermissionRules", () => {
+		it("should return [] by default", () => {
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ theme: "dark" }));
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getPermissionRules()).toEqual([]);
+		});
+
+		it("should return configured rules from settings", () => {
+			writeFileSync(
+				join(agentDir, "settings.json"),
+				JSON.stringify({ permissionRules: [{ tool: "bash", action: "ask" }] }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getPermissionRules()).toEqual([{ tool: "bash", action: "ask" }]);
+		});
+
+		it("should return rules from the local layer", () => {
+			writeFileSync(
+				join(projectDir, ".piki", "settings.local.json"),
+				JSON.stringify({ permissionRules: [{ tool: "read", action: "allow" }] }),
+			);
+			const manager = SettingsManager.create(projectDir, agentDir);
+			expect(manager.getPermissionRules()).toEqual([{ tool: "read", action: "allow" }]);
+		});
+
+		it("should support inMemory configuration", () => {
+			const manager = SettingsManager.inMemory({ permissionRules: [{ tool: "edit", action: "reject" }] });
+			expect(manager.getPermissionRules()).toEqual([{ tool: "edit", action: "reject" }]);
+		});
+	});
+});
+
+describe("SettingsManager atomic writes", () => {
+	const atomicTestDir = join(process.cwd(), "test-settings-atomic-tmp");
+	const atomicAgentDir = join(atomicTestDir, "agent");
+	const atomicProjectDir = join(atomicTestDir, "project");
+
+	beforeEach(() => {
+		if (existsSync(atomicTestDir)) {
+			rmSync(atomicTestDir, { recursive: true });
+		}
+		mkdirSync(atomicAgentDir, { recursive: true });
+		mkdirSync(join(atomicProjectDir, ".piki"), { recursive: true });
+	});
+
+	afterEach(() => {
+		if (existsSync(atomicTestDir)) {
+			rmSync(atomicTestDir, { recursive: true });
+		}
+	});
+
+	it("leaves a complete, valid JSON file and no .tmp leftover after two consecutive writes", async () => {
+		const manager = SettingsManager.create(atomicProjectDir, atomicAgentDir);
+
+		// Large multi-field change so the serialized settings JSON is substantial.
+		manager.setTheme("dark");
+		manager.setDefaultThinkingLevel("high");
+		manager.setEnabledModels(["claude-opus-4-5", "gpt-5.2-codex", "gemini-2.5-pro"]);
+		await manager.flush();
+
+		const settingsPath = join(atomicAgentDir, "settings.json");
+		expect(existsSync(settingsPath)).toBe(true);
+		expect(existsSync(`${settingsPath}.tmp`)).toBe(false);
+		const parsed = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(parsed.theme).toBe("dark");
+		expect(parsed.defaultThinkingLevel).toBe("high");
+		expect(parsed.enabledModels).toEqual(["claude-opus-4-5", "gpt-5.2-codex", "gemini-2.5-pro"]);
+
+		// Second write on top of the first must also be complete with no leftover.
+		manager.setTheme("light");
+		await manager.flush();
+		expect(existsSync(`${settingsPath}.tmp`)).toBe(false);
+		const parsed2 = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		expect(parsed2.theme).toBe("light");
+		expect(parsed2.enabledModels).toEqual(parsed.enabledModels);
+	});
 });

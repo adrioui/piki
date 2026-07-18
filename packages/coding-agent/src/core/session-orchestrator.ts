@@ -33,16 +33,22 @@ import {
 	type ProjectionDefinition,
 	type RoleDefinition,
 } from "@piki/event-core";
+import {
+	COORDINATOR_ON_IDLE,
+	COORDINATOR_ON_SPAWN,
+	JUSTIFICATION_TEMPLATES,
+	JUSTIFICATION_VALUES,
+	OBSERVER_PROMPT,
+} from "@piki/roles";
 import { Effect, ExecutionStrategy, Exit, Fiber, Queue, Scope } from "effect";
 import { AgentModelResolver } from "./agent-model-resolver.ts";
 import type { AgentSession, AgentSessionEvent } from "./agent-session.ts";
 import type { AgentSessionServices } from "./agent-session-services.ts";
+import { buildConfigState, type ConfigState, refineConfigState } from "./ambient/config.ts";
 import { resolvePreferredAuxModel, runAuxModelText } from "./aux-model.ts";
 import { ForkRuntime } from "./fork-runtime.ts";
 import { verifyGoal } from "./goal-verifier.ts";
-import { COORDINATOR_ON_IDLE, COORDINATOR_ON_SPAWN } from "./role-prompts/lifecycle-hooks.ts";
-import { JUSTIFICATION_TEMPLATES, JUSTIFICATION_VALUES, OBSERVER_PROMPT } from "./role-prompts/observer.ts";
-import { getSystemPrompt } from "./role-prompts/worker-base.ts";
+import type { SessionEntry } from "./session-manager.ts";
 import { createCheckpointId, createSnapshot, isGitRepo } from "./snapshot.ts";
 import { TasteProfileStore, type TasteSignalType } from "./taste.ts";
 import { type OverthinkingInfo, ThinkingGovernor } from "./thinking-governor.ts";
@@ -516,6 +522,7 @@ export class SessionOrchestrator {
 	private readonly forkRuntime: ForkRuntime;
 	private readonly thinkingGovernor: ThinkingGovernor;
 	private readonly forkedProjectionStore: ForkedProjectionStore<RuntimeEvent>;
+	private configState: ConfigState;
 	private sequence: number;
 	private turnOutcomeCount: number;
 	private lastEventId?: string;
@@ -528,6 +535,28 @@ export class SessionOrchestrator {
 	private errorPublishingDepth = 0;
 	private disposed = false;
 
+	/** Persist a durable report for every completed worker. */
+	saveWorkerCompletionArtifact(result: {
+		text: string;
+		forkId: string;
+		agentId: string;
+		role: string;
+		stopReason?: string;
+	}): string | undefined {
+		if (!result.text.trim()) return undefined;
+		return this.session.scratchpad.save({
+			title: `Worker ${result.role} finished report`,
+			category: "reports",
+			content: result.text,
+			tags: ["worker-report"],
+			metadata: {
+				forkId: result.forkId,
+				agentId: result.agentId,
+				stopReason: result.stopReason ?? "finished",
+			},
+		});
+	}
+
 	constructor(session: AgentSession, services: AgentSessionServices) {
 		this.session = session;
 		this.services = services;
@@ -535,7 +564,7 @@ export class SessionOrchestrator {
 			session.sessionManager.getSessionEventsFile() ??
 			join(services.agentDir, "runtime-events", `${session.sessionId}.events.jsonl`);
 		const store = new JsonlEventStore<RuntimeEvent>(eventsPath);
-		this.metaPath = session.sessionManager.getSessionMetaFile();
+		this.metaPath = session.sessionManager.getSessionRuntimeMetaFile();
 		this.projectionsPath = session.sessionManager.getSessionProjectionsFile();
 		const existingMeta = readJsonFile<SessionRuntimeMeta>(this.metaPath);
 		this.existingEvents = store.list();
@@ -609,7 +638,7 @@ export class SessionOrchestrator {
 			publish: (type, payload) => this.publishRuntimeEvent(type, payload),
 			getSequence: () => this.sequence,
 			resolveModel: (role: string) => {
-				const resolver = new AgentModelResolver(this.services);
+				const resolver = new AgentModelResolver(this.services, this.session.getRoleModelOverrides());
 				const model = resolver.resolve(role);
 				return model ? { provider: model.provider, id: model.id } : undefined;
 			},
@@ -619,7 +648,7 @@ export class SessionOrchestrator {
 		// Register WorkerExecutor unconditionally. Multi-agent workers are core runtime behavior.
 		this.workerExecutor = new WorkerExecutor({
 			resolveModel: (role: string) => {
-				const resolver = new AgentModelResolver(this.services);
+				const resolver = new AgentModelResolver(this.services, this.session.getRoleModelOverrides());
 				return resolver.resolve(role) as Model<string> | undefined;
 			},
 			// Reuse the leader's streamFn so workers resolve API keys, headers, env,
@@ -627,8 +656,8 @@ export class SessionOrchestrator {
 			// modelRegistry.getApiKeyAndHeaders(model) per call). Without this,
 			// workers fall back to bare streamSimple and throw for key-based providers.
 			streamFn: this.session.agent.streamFn,
-			getSystemPrompt: (role: string) => getSystemPrompt(role),
 			getAllTools: () => this.session.getExecutableWorkerTools(),
+			getAllSkills: () => this.session.resourceLoader.getSkills().skills,
 			getProjectContext: () => collectFolderStructure(this.session.sessionManager.getCwd()),
 			cwd: this.session.sessionManager.getCwd(),
 			scratchpadPath: join(this.session.sessionManager.getCwd(), ".piki", "scratchpad"),
@@ -640,14 +669,20 @@ export class SessionOrchestrator {
 					.join("\n\n"),
 			publishEvent: (type, payload) => this.publishRuntimeEvent(type, payload),
 			userRules: this.session.getUserPermissionRules(),
+			disableShellSafeguards: this.session.disableShellSafeguards,
+			disableCwdSafeguards: this.session.disableCwdSafeguards,
+			getDefaultThinkingLevel: () => this.session.settingsManager.getDefaultThinkingLevel(),
 			forkedProjectionStore: this.forkedProjectionStore,
 			onWorkerFinished: (result) => {
+				this.saveWorkerCompletionArtifact(result);
+				const yielded = this.forkRuntime.takeYieldIntent(result.agentId);
 				void this.publishRuntimeEvent("worker_finished", {
 					agentId: result.agentId,
 					forkId: result.forkId,
 					role: result.role,
 					result: result.text,
 					stopReason: result.stopReason ?? "finished",
+					yield: yielded,
 				}).catch(() => {});
 				void this.session
 					.sendCustomMessage(
@@ -696,6 +731,10 @@ export class SessionOrchestrator {
 		this.sink.registerRole(this.workerExecutor.asRole());
 		this.eventConsumerFiber = this.startEventConsumer();
 		this.registerCleanupFinalizers();
+		// Seed the per-role config ambient from the fallback profile. It is
+		// refined against the live model catalog in initialize() once the
+		// orchestrator's own resolver/overrides are available.
+		this.configState = buildConfigState();
 	}
 
 	private startEventConsumer(): Fiber.Fiber<never, unknown> {
@@ -737,6 +776,13 @@ export class SessionOrchestrator {
 	}
 
 	async initialize(): Promise<void> {
+		// G-W4.4: once the session is attached, refine the per-role config
+		// ambient against the live model catalog (resolved through the same
+		// AgentModelResolver precedence used for workers/leader, including
+		// runtime role-model overrides) so per-role caps reflect the actual
+		// model context windows instead of the hardcoded fallback.
+		this.configState = refineConfigState(this.configState, this.services, this.session.getRoleModelOverrides());
+
 		this.unsubscribe = this.session.subscribe((event) => {
 			void this.handleSessionEvent(event).catch((error) => {
 				void this.publishRuntimeEvent("session.role_error", {
@@ -783,6 +829,14 @@ export class SessionOrchestrator {
 			});
 		}
 
+		// Seed CLI --goal into the Goal projection at session init.
+		// Guarded so resume/restore of a session that already has a goal does not re-inject.
+		if (this.session.goal && !this.existingEvents.some((e) => e.type === "goal.injected")) {
+			await this.publishRuntimeEventUnqueued("goal.injected", {
+				goal: this.session.goal,
+			});
+		}
+
 		const tasteProfile = this.tasteStore.renderInjectedProfile(this.session.sessionManager.getCwd());
 		if (
 			tasteProfile &&
@@ -808,6 +862,26 @@ export class SessionOrchestrator {
 		if (this.disposed) return;
 		this.disposed = true;
 		Effect.runSync(Scope.close(this.cleanupScope, Exit.void));
+	}
+
+	/** Read-only view of the per-fork worker entries captured by the executor. */
+	getForkEntries(): Map<string, SessionEntry[]> {
+		return this.workerExecutor?.getForkEntries() ?? new Map();
+	}
+
+	/** Read-only view of the per-fork real fork metadata captured by the executor. */
+	getForkMeta(): Map<
+		string,
+		{
+			agentId: string;
+			parentForkId: string | null;
+			role: string;
+			taskId: string | undefined;
+			mode: string;
+			message: string | undefined;
+		}
+	> {
+		return this.workerExecutor?.getForkMeta() ?? new Map();
 	}
 
 	private createCheckpoint(kind: "turn-start" | "turn-end" | "manual" | "redo"):
@@ -922,6 +996,15 @@ export class SessionOrchestrator {
 					...assessment,
 					message: assessment.escalate ? `<escalation_required>\n${template}\n</escalation_required>` : "pass",
 				});
+				// Persist the observer assessment as a session entry so it serializes
+				// into the ATIF alpha22 export (S8 observer step). Leader path only —
+				// worker forks publish a separate `observer_verdict` event and must not
+				// double-count here.
+				this.session.sessionManager.appendObserver(
+					assessment.escalate,
+					assessment.justification,
+					assessment.escalate ? `<escalation_required>\n${template}\n</escalation_required>` : "pass",
+				);
 				await this.publishRuntimeEvent("observation", {
 					difficulty: assessment.difficulty,
 					churn: assessment.churn,
@@ -1543,6 +1626,9 @@ export class SessionOrchestrator {
 				next("compaction_started", {
 					reason: event.reason,
 				});
+				next("compaction_prepared", {
+					reason: event.reason,
+				});
 				break;
 			case "compaction_end":
 				next("session.compaction_ended", {
@@ -1552,6 +1638,12 @@ export class SessionOrchestrator {
 					errorMessage: event.errorMessage,
 				});
 				next("compaction_ended", {
+					reason: event.reason,
+					aborted: event.aborted,
+					willRetry: event.willRetry,
+					errorMessage: event.errorMessage,
+				});
+				next("compaction_injected", {
 					reason: event.reason,
 					aborted: event.aborted,
 					willRetry: event.willRetry,
@@ -1619,6 +1711,7 @@ export class SessionOrchestrator {
 		ensureParent(this.projectionsPath);
 		const projections = this.sink.projections();
 		const overview = projections.get<SessionOverviewProjection>("overview");
+		const snapshots = typeof projections.snapshots === "function" ? projections.snapshots() : [];
 		const meta: SessionRuntimeMeta = {
 			version: 1,
 			sessionId: this.session.sessionId,
@@ -1643,7 +1736,7 @@ export class SessionOrchestrator {
 			writeFileSync(this.metaPath, `${JSON.stringify(meta, null, 2)}\n`);
 		}
 		if (this.projectionsPath) {
-			writeFileSync(this.projectionsPath, `${JSON.stringify(projections.snapshots(), jsonReplacer, 2)}\n`);
+			writeFileSync(this.projectionsPath, `${JSON.stringify(snapshots, jsonReplacer, 2)}\n`);
 		}
 	}
 
@@ -1665,4 +1758,29 @@ export async function attachSessionOrchestrator(
 	ORCHESTRATORS.set(session.sessionId, orchestrator);
 	await orchestrator.initialize();
 	return orchestrator;
+}
+
+/** Read-only accessor for the per-fork worker entries captured by a session's
+ * WorkerExecutor. Used by `AgentSession.getForkEntries()` to populate ATIF
+ * subagent_trajectories without holding a direct orchestrator reference. */
+export function getForkEntriesForSession(sessionId: string): Map<string, SessionEntry[]> {
+	return ORCHESTRATORS.get(sessionId)?.getForkEntries() ?? new Map();
+}
+
+/** Read-only accessor for the per-fork real fork metadata captured by a session's
+ * WorkerExecutor. Used by `AgentSession.getForkMeta()` to populate ATIF
+ * spawn-step real `agentId`/`role`/`taskId`/`mode`/`message` without holding a
+ * direct orchestrator reference. Mirrors `getForkEntriesForSession`. */
+export function getForkMetaForSession(sessionId: string): Map<
+	string,
+	{
+		agentId: string;
+		parentForkId: string | null;
+		role: string;
+		taskId: string | undefined;
+		mode: string;
+		message: string | undefined;
+	}
+> {
+	return ORCHESTRATORS.get(sessionId)?.getForkMeta() ?? new Map();
 }

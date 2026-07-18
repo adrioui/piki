@@ -17,6 +17,7 @@ import {
 } from "../../utils/shell.ts";
 import { type AutoDetachResult, spawnDetached } from "../auto-detach.ts";
 import { classifyCommand } from "../command-classifier.ts";
+import { DEFAULT_CONTEXT_WINDOW, proportionalToolOutputBytes, proportionalToolOutputLines } from "../context-budget.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { getTextOutput, invalidArgText, str } from "./render-utils.ts";
@@ -51,6 +52,10 @@ export interface BashToolDetails {
 	fullOutputPath?: string;
 	/** Set when the command was auto-detached (long-running, no explicit timeout). */
 	autoDetach?: AutoDetachResult;
+	/** Exit code of the command (0 for success; non-zero for an error that still
+	 * produced a result, matching Magnitude alpha22's completed-result
+	 * `exitCode` surfacing rather than a hard error). */
+	exitCode?: number;
 }
 
 /**
@@ -109,7 +114,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
 			const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
 				cwd,
 				detached: process.platform !== "win32",
-				env: env ?? getShellEnv(),
+				env: env ?? getShellEnv(undefined, process.env.M),
 				stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 				windowsHide: true,
 			});
@@ -167,11 +172,16 @@ export interface BashSpawnContext {
 
 export type BashSpawnHook = (context: BashSpawnContext) => BashSpawnContext;
 
-function resolveSpawnContext(command: string, cwd: string, spawnHook?: BashSpawnHook): BashSpawnContext {
+function resolveSpawnContext(
+	command: string,
+	cwd: string,
+	scratchpadPath?: string,
+	spawnHook?: BashSpawnHook,
+): BashSpawnContext {
 	const baseContext: BashSpawnContext = {
 		command,
 		cwd,
-		env: { ...getShellEnv(), NO_COLOR: "1", PROJECT_ROOT: cwd, M: process.env.M ?? "" },
+		env: { ...getShellEnv(undefined, scratchpadPath), NO_COLOR: "1", PROJECT_ROOT: cwd },
 	};
 	return spawnHook ? spawnHook(baseContext) : baseContext;
 }
@@ -183,6 +193,8 @@ export interface BashToolOptions {
 	commandPrefix?: string;
 	/** Optional explicit shell path from settings */
 	shellPath?: string;
+	/** Session scratchpad root, used to set the `M` env var for spawned shells */
+	scratchpadPath?: string;
 	/** Hook to adjust command, cwd, or env before execution */
 	spawnHook?: BashSpawnHook;
 }
@@ -324,6 +336,7 @@ export function createBashToolDefinition(
 	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
 	const commandPrefix = options?.commandPrefix;
 	const spawnHook = options?.spawnHook;
+	const scratchpadPath = options?.scratchpadPath;
 	return {
 		name: "bash",
 		label: "bash",
@@ -351,6 +364,12 @@ export function createBashToolDefinition(
 		) {
 			const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
 
+			// Scale tool-output truncation to the active model's context window so
+			// small and large models do not share an identical cap.
+			const contextWindow = _ctx?.model?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+			const maxBashBytes = proportionalToolOutputBytes(contextWindow);
+			const maxBashLines = proportionalToolOutputLines(contextWindow);
+
 			// Auto-detach long-running commands when no explicit timeout is set.
 			if (timeout === undefined || timeout <= 0) {
 				const classification = classifyCommand(command);
@@ -359,8 +378,12 @@ export function createBashToolDefinition(
 					// instead of spawning locally. This ensures remote backends (SSH, Docker)
 					// handle the command correctly.
 					if (ops.isLocal === false) {
-						const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
-						const output = new OutputAccumulator({ tempFilePrefix: "pi-detached" });
+						const spawnContext = resolveSpawnContext(resolvedCommand, cwd, scratchpadPath, spawnHook);
+						const output = new OutputAccumulator({
+							tempFilePrefix: "pi-detached",
+							maxBytes: maxBashBytes,
+							maxLines: maxBashLines,
+						});
 						try {
 							await ops.exec(spawnContext.command, spawnContext.cwd, {
 								onData: (data) => output.append(data),
@@ -399,7 +422,13 @@ export function createBashToolDefinition(
 						};
 					}
 
-					const detachResult = spawnDetached(resolvedCommand, cwd, classification.reason, options?.shellPath);
+					const detachResult = spawnDetached(
+						resolvedCommand,
+						cwd,
+						classification.reason,
+						options?.shellPath,
+						scratchpadPath,
+					);
 					return {
 						content: [
 							{
@@ -420,8 +449,12 @@ export function createBashToolDefinition(
 				}
 			}
 
-			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
-			const output = new OutputAccumulator({ tempFilePrefix: "pi-bash" });
+			const spawnContext = resolveSpawnContext(resolvedCommand, cwd, scratchpadPath, spawnHook);
+			const output = new OutputAccumulator({
+				tempFilePrefix: "pi-bash",
+				maxBytes: maxBashBytes,
+				maxLines: maxBashLines,
+			});
 			let acceptingOutput = true;
 			let updateTimer: NodeJS.Timeout | undefined;
 			let updateDirty = false;
@@ -540,7 +573,18 @@ export function createBashToolDefinition(
 				const snapshot = await finishOutput();
 				const { text: outputText, details } = formatOutput(snapshot);
 				if (exitCode !== 0 && exitCode !== null) {
-					throw new Error(appendStatus(outputText, `Command exited with code ${exitCode}`));
+					// L3: surface non-zero exit as a completed result carrying the
+					// exit code (alpha22 parity) instead of throwing a hard error.
+					// Also append a model-visible `exit_code: N` footer so the model
+					// sees the exit code in the result text (mag renders
+					// `<exitCode>N</exitCode>` into the result). The footer is appended
+					// after formatOutput so it precedes the truncation full-output
+					// footer (which must remain at the very end).
+					const visibleText = outputText ? `${outputText}\n\nexit_code: ${exitCode}` : `exit_code: ${exitCode}`;
+					return {
+						content: [{ type: "text", text: visibleText }],
+						details: { ...details, exitCode },
+					};
 				}
 				return { content: [{ type: "text", text: outputText }], details };
 			} finally {
@@ -603,6 +647,9 @@ export function createShellToolDefinition(
 	options?: BashToolOptions,
 ): ToolDefinition<typeof shellSchema, BashToolDetails | undefined, BashRenderState> {
 	const bashDef = createBashToolDefinition(cwd, options);
+	const ops = options?.operations ?? createLocalBashOperations({ shellPath: options?.shellPath });
+	const spawnHook = options?.spawnHook;
+	const scratchpadPath = options?.scratchpadPath;
 	return {
 		...bashDef,
 		name: "shell",
@@ -614,7 +661,73 @@ export function createShellToolDefinition(
 		parameters: shellSchema,
 		async execute(toolCallId, input: ShellToolInput, signal, onUpdate, ctx) {
 			const { command, detach_after } = input;
-			return bashDef.execute(toolCallId, { command, timeout: detach_after }, signal, onUpdate, ctx);
+
+			// No detach_after: behave exactly like bash, including the
+			// classification-based auto-detach for known long-running commands.
+			if (detach_after === undefined) {
+				return bashDef.execute(toolCallId, { command }, signal, onUpdate, ctx);
+			}
+
+			// Remote backends (SSH, Docker) cannot detach locally; fall back to a
+			// hard kill-timeout so the command is at least bounded.
+			if (ops.isLocal === false) {
+				return bashDef.execute(toolCallId, { command, timeout: detach_after }, signal, onUpdate, ctx);
+			}
+
+			// Local backend: run in the foreground, streaming output. If the command
+			// runs longer than `detach_after` seconds, detach it into a background
+			// process instead of killing it.
+			//
+			// Previously `detach_after` was forwarded as `timeout`, which made the
+			// exec backend kill the process on the threshold and surface a timeout
+			// error — the auto-detach path never fired and the tool description
+			// ("continues running in the background") was a lie.
+			const detachMs = Math.min(Math.max(detach_after, 0), 60) * 1000;
+			const spawnContext = resolveSpawnContext(command, cwd, scratchpadPath, spawnHook);
+
+			let detachResult: AutoDetachResult | undefined;
+			const controller = new AbortController();
+			if (signal) {
+				if (signal.aborted) controller.abort();
+				else signal.addEventListener("abort", () => controller.abort(), { once: true });
+			}
+
+			const detachTimer = setTimeout(() => {
+				detachResult = spawnDetached(
+					spawnContext.command,
+					cwd,
+					`detached after ${detach_after}s`,
+					options?.shellPath,
+					scratchpadPath,
+				);
+				controller.abort();
+			}, detachMs);
+
+			try {
+				const result = await bashDef.execute(toolCallId, { command }, controller.signal, onUpdate, ctx);
+				clearTimeout(detachTimer);
+				return result;
+			} catch (err) {
+				if (detachResult) {
+					const detach = detachResult;
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: [
+									`Command detached after ${detach_after}s: ${detach.reason}`,
+									`PID: ${detach.pid}`,
+									`Log: ${detach.logPath}`,
+									"",
+									"Output is being written to the log file. The command continues running in the background.",
+								].join("\n"),
+							},
+						],
+						details: { autoDetach: detach },
+					};
+				}
+				throw err;
+			}
 		},
 	};
 }

@@ -60,23 +60,27 @@ describe("AgentSession prompt profile on model switch", () => {
 		});
 
 		try {
-			// Starts on Claude -> default profile (verbose identity present)
+			// Starts on Claude -> body is LEADER_PROMPT; default lineage tuning is the tail.
+			expect(session.systemPrompt).toContain("You are piki, a highly capable coding agent");
+			// The default-family tuning (tail) is present but NOT the first instruction.
 			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside piki");
-			expect(session.systemPrompt).not.toContain("You are piki, an interactive coding agent.");
+			// Leader identity precedes the family tuning.
+			expect(session.systemPrompt.indexOf("You are piki, a highly capable coding agent")).toBeLessThan(
+				session.systemPrompt.indexOf("You are an expert coding assistant operating inside piki"),
+			);
 
-			// Switch to GLM -> open-source-explicit profile rebuilds the prompt
+			// Switch to GLM -> open-source-explicit tail tuning; body unchanged (still LEADER_PROMPT).
 			await session.setModel(glmModel as Model<"openai-completions">);
+			expect(session.systemPrompt).toContain("You are piki, a highly capable coding agent");
 			expect(session.systemPrompt).toContain("You are piki, an interactive coding agent.");
 			expect(session.systemPrompt).toContain("Tool usage:");
-			expect(session.systemPrompt).not.toContain("You are an expert coding assistant operating inside piki");
+			expect(session.systemPrompt).toContain("piki coding harness");
 
-			// Switch back to Claude -> default profile restored. The prompt content
-			// is deterministic, so this reproduces the original default prompt; what
-			// matters is that the open-source-explicit sections are gone again.
+			// Switch back to Claude -> default tail tuning restored, body still LEADER_PROMPT.
 			await session.setModel(claudeModel as Model<"anthropic-messages">);
+			expect(session.systemPrompt).toContain("You are piki, a highly capable coding agent");
 			expect(session.systemPrompt).toContain("You are an expert coding assistant operating inside piki");
 			expect(session.systemPrompt).not.toContain("Tool usage:");
-			expect(session.systemPrompt).not.toContain("You are piki, an interactive coding agent.");
 		} finally {
 			session.dispose();
 		}

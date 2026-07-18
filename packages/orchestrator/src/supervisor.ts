@@ -267,7 +267,12 @@ export class OrchestratorSupervisor {
 		return stored ? cloneInstance(stored) : undefined;
 	}
 
-	async spawnInstance(options: { cwd: string; label?: string }): Promise<InstanceRecord> {
+	async spawnInstance(options: {
+		cwd: string;
+		label?: string;
+		provider?: string;
+		model?: string;
+	}): Promise<InstanceRecord> {
 		const now = new Date().toISOString();
 		const live: LiveInstance = {
 			record: {
@@ -277,6 +282,8 @@ export class OrchestratorSupervisor {
 				createdAt: now,
 				lastSeenAt: now,
 				label: options.label,
+				provider: options.provider,
+				model: options.model,
 			},
 			resources: {},
 			subscribers: new Set(),
@@ -285,7 +292,11 @@ export class OrchestratorSupervisor {
 		upsertInstance(live.record);
 
 		try {
-			const rpcProcess = createRpcProcessInstance({ cwd: options.cwd });
+			const rpcProcess = createRpcProcessInstance({
+				cwd: options.cwd,
+				provider: options.provider,
+				model: options.model,
+			});
 			this.bindRpcProcess(live, rpcProcess);
 			await this.syncInstanceRecord(live);
 			const registeredRecord = await radiusPresence.registerPi(live.record);

@@ -1,4 +1,3 @@
-import { COMPACT_MAX_FILE_CHARS, COMPACT_MAX_FILES, COMPACTION_MAX_RETRIES } from "./constants.ts";
 import type { EventEnvelope, RoleDefinition } from "./types.ts";
 
 type RuntimeEvent = EventEnvelope<string, Record<string, unknown>>;
@@ -31,23 +30,6 @@ export function createChatTitleWorker<TEvent extends RuntimeEvent = RuntimeEvent
 		run: async ({ event, publish }) => {
 			await publish(
 				createEvent(event, "chat_title_generated", { title: String(event.payload.title ?? "New chat") }) as TEvent,
-			);
-		},
-	};
-}
-
-export function createCompactionWorker<TEvent extends RuntimeEvent = RuntimeEvent>(): RoleDefinition<TEvent> {
-	return {
-		name: "CompactionWorker",
-		listenSignals: ["ContextUsage/softCapExceeded"],
-		run: async ({ event, publish }) => {
-			await publish(
-				createEvent(event, "compaction_started", {
-					reason: "threshold",
-					maxFiles: COMPACT_MAX_FILES,
-					maxFileChars: COMPACT_MAX_FILE_CHARS,
-					maxRetries: COMPACTION_MAX_RETRIES,
-				}) as TEvent,
 			);
 		},
 	};
@@ -149,7 +131,6 @@ export function createBuiltinWorkers<TEvent extends RuntimeEvent = RuntimeEvent>
 	return [
 		createCortexWorker<TEvent>(),
 		createChatTitleWorker<TEvent>(),
-		createCompactionWorker<TEvent>(),
 		createFileMentionResolverWorker<TEvent>(),
 		createProcessMetricsWorker<TEvent>(),
 		createShellProcessWorker<TEvent>(),

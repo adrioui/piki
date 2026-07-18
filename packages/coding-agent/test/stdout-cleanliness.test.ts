@@ -129,8 +129,10 @@ describe("stdout cleanliness in non-interactive modes", () => {
 	it("handles invalid mode gracefully without crashing", async () => {
 		const result = await runCli(["--mode", "invalid"]);
 
-		// Invalid mode is silently ignored, falls back to default
+		// Invalid mode is an error: non-zero exit and a stderr diagnostic
 		expect(result.code).not.toBeNull();
+		expect(result.code).not.toBe(0);
+		expect(result.stderr).toContain("Invalid mode");
 	});
 
 	it("prints version with exit code 0", async () => {

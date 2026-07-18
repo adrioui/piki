@@ -11,7 +11,7 @@ export const COMMANDCODE_MODELS = {
 		provider: "commandcode",
 		baseUrl: "https://api.commandcode.ai",
 		reasoning: true,
-		thinkingLevelMap: {"xhigh":"xhigh"},
+		thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0,
@@ -29,6 +29,7 @@ export const COMMANDCODE_MODELS = {
 		provider: "commandcode",
 		baseUrl: "https://api.commandcode.ai",
 		reasoning: true,
+		thinkingLevelMap: {"max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0,
@@ -46,6 +47,7 @@ export const COMMANDCODE_MODELS = {
 		provider: "commandcode",
 		baseUrl: "https://api.commandcode.ai",
 		reasoning: true,
+		thinkingLevelMap: {"xhigh":"xhigh","max":"max"},
 		input: ["text"],
 		cost: {
 			input: 0,

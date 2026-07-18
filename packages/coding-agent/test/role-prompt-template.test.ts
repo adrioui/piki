@@ -1,10 +1,10 @@
+import { definePrompt } from "@piki/roles";
 import { describe, expect, it } from "vitest";
-import { definePrompt } from "../src/core/role-prompts/prompt.ts";
 import { getPikiRoleDefinition, getRolePolicy, PIKI_ROLE_DEFINITIONS } from "../src/core/roles/definitions.ts";
 
 describe("Piki role prompt templates", () => {
 	it("renders {{VAR}} placeholders while preserving unknown placeholders", () => {
-		const prompt = definePrompt("Hello {{ NAME }} from {{PLACE}} and {{UNKNOWN}}");
+		const prompt = definePrompt("Hello {{NAME}} from {{PLACE}} and {{UNKNOWN}}");
 
 		expect(prompt.render({ NAME: "agent", PLACE: "repo" })).toBe("Hello agent from repo and {{UNKNOWN}}");
 	});
@@ -15,8 +15,9 @@ describe("Piki role prompt templates", () => {
 		expect(engineer?.agentKind).toBe("worker");
 		expect(engineer?.spawnable).toBe(true);
 		expect(engineer?.toolkit).toBe("workerBase");
-		expect(engineer?.prompt.render()).toContain("## Thinking");
-		expect(engineer?.prompt.render()).toContain("## Role");
+		expect(engineer?.prompt.render()).toContain("# Thinking");
+		expect(engineer?.prompt.render()).toContain("# Engineer");
+		expect(engineer?.prompt.render()).toContain("## Skills");
 		expect(getRolePolicy("engineer")).toMatchObject({ allowMutation: true, requiresVerification: true });
 	});
 

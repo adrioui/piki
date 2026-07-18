@@ -1,7 +1,8 @@
+import { renderLeaderSystemPrompt, renderWorkerSystemPrompt } from "@piki/roles";
+import type { Skill } from "@piki/skills";
 import { describe, expect, test } from "vitest";
-import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
-import { buildSystemPrompt } from "../src/core/system-prompt.ts";
+import { buildSystemPrompt, buildSystemPromptTail } from "../src/core/system-prompt.ts";
 
 function makeSkill(name: string, description: string): Skill {
 	return {
@@ -46,7 +47,7 @@ describe("buildSystemPrompt", () => {
 			const prompt = buildSystemPrompt({
 				toolSnippets: {
 					read: "Read file contents",
-					bash: "Execute bash commands",
+					shell: "Execute shell commands",
 					edit: "Make surgical edits",
 					write: "Create or overwrite files",
 				},
@@ -56,7 +57,7 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).toContain("- read:");
-			expect(prompt).toContain("- bash:");
+			expect(prompt).toContain("- shell:");
 			expect(prompt).toContain("- edit:");
 			expect(prompt).toContain("- write:");
 		});
@@ -244,10 +245,10 @@ describe("buildSystemPrompt", () => {
 		test("selected tool snippets still appear in open-source-explicit prompt", () => {
 			const prompt = buildSystemPrompt({
 				promptVariant: "open-source-explicit",
-				selectedTools: ["read", "bash"],
+				selectedTools: ["read", "shell"],
 				toolSnippets: {
 					read: "Read file contents",
-					bash: "Execute bash commands",
+					shell: "Execute shell commands",
 				},
 				contextFiles: [],
 				skills: [],
@@ -255,7 +256,7 @@ describe("buildSystemPrompt", () => {
 			});
 
 			expect(prompt).toContain("- read: Read file contents");
-			expect(prompt).toContain("- bash: Execute bash commands");
+			expect(prompt).toContain("- shell: Execute shell commands");
 		});
 
 		test("context files still append in open-source-explicit prompt", () => {
@@ -274,7 +275,7 @@ describe("buildSystemPrompt", () => {
 		test("skills still append in open-source-explicit prompt when read tool is available", () => {
 			const prompt = buildSystemPrompt({
 				promptVariant: "open-source-explicit",
-				selectedTools: ["read", "bash"],
+				selectedTools: ["read", "shell"],
 				toolSnippets: { read: "Read file contents" },
 				skills: [makeSkill("docx", "Create DOCX documents")],
 				cwd: process.cwd(),
@@ -332,5 +333,102 @@ describe("buildSystemPrompt", () => {
 			expect(prompt).toContain("package.json");
 			expect(prompt).toContain("src/");
 		});
+	});
+});
+
+describe("role prompt renderers", () => {
+	describe("leader skills single-injection", () => {
+		test("leader body no longer contains the {{SKILLS_SECTION}} token", () => {
+			const prompt = renderLeaderSystemPrompt({});
+			expect(prompt).not.toContain("{{SKILLS_SECTION}}");
+		});
+
+		test("leader body has no <available_skills> block (injected once by appendTail)", () => {
+			const prompt = renderLeaderSystemPrompt({});
+			expect(prompt).not.toContain("<available_skills>");
+		});
+	});
+
+	describe("worker system prompt tail", () => {
+		test("appends date and working directory when cwd is provided", () => {
+			const prompt = renderWorkerSystemPrompt("engineer", {
+				skills: "<available_skills></available_skills>",
+				cwd: "/proj",
+			});
+			expect(prompt).toMatch(/Current date: \d{4}-\d{2}-\d{2}/);
+			expect(prompt).toContain("Current working directory: /proj");
+		});
+
+		test("omits date/working directory tail when cwd is absent", () => {
+			const prompt = renderWorkerSystemPrompt("engineer", { skills: "<available_skills></available_skills>" });
+			expect(prompt).not.toContain("Current working directory:");
+		});
+
+		test("contains exactly one <available_skills> block for the worker", () => {
+			const prompt = renderWorkerSystemPrompt("engineer", {
+				skills: "<available_skills><skill>docx</skill></available_skills>",
+			});
+			expect(prompt.match(/<available_skills>/g)).toHaveLength(1);
+		});
+
+		test("renders the per-role thinking limit (scout=2000, engineer=20000)", () => {
+			// The caller (worker-executor) passes the role's maxThoughtChars from
+			// ROLE_DEFINITIONS; scout caps at 2000, engineer at 20000.
+			const scoutPrompt = renderWorkerSystemPrompt("scout", { skills: "", thinkingLimit: 2000 });
+			expect(scoutPrompt).toContain("limited to 2000 characters");
+			const engineerPrompt = renderWorkerSystemPrompt("engineer", { skills: "", thinkingLimit: 20000 });
+			expect(engineerPrompt).toContain("limited to 20000 characters");
+		});
+
+		test("honors an explicit thinkingLimit override", () => {
+			const prompt = renderWorkerSystemPrompt("scout", { skills: "", thinkingLimit: 1234 });
+			expect(prompt).toContain("limited to 1234 characters");
+		});
+	});
+});
+
+describe("leader prompt composition (body/tail inversion fix)", () => {
+	test("leader identity is the body, lineage tuning is the tail", () => {
+		const tail = buildSystemPromptTail({
+			cwd: process.cwd(),
+			selectedTools: ["read", "shell"],
+			toolSnippets: { read: "Read file contents", shell: "Execute shell commands" },
+			provider: "anthropic",
+			modelId: "claude-sonnet-4-5",
+			modelName: "Claude Sonnet",
+		});
+		const body = renderLeaderSystemPrompt({ thinkingLimit: 20000 });
+		const prompt = buildSystemPrompt({
+			cwd: process.cwd(),
+			customPrompt: body,
+			appendSystemPrompt: tail,
+			skills: [],
+			contextFiles: [],
+		});
+		// Body (leader identity) comes first.
+		expect(prompt.indexOf("You are piki, a highly capable coding agent")).toBeLessThan(
+			prompt.indexOf("You are an expert coding assistant operating inside piki"),
+		);
+		// Both body and tail present.
+		expect(prompt).toContain("You are piki, a highly capable coding agent");
+		expect(prompt).toContain("You are an expert coding assistant operating inside piki");
+	});
+
+	test("skills injected once after tail, not duplicated in leader body", () => {
+		const tail = buildSystemPromptTail({
+			cwd: process.cwd(),
+			provider: "zai",
+			modelId: "glm-4.7",
+			modelName: "GLM-4.7",
+		});
+		const body = renderLeaderSystemPrompt({ thinkingLimit: 20000 });
+		const prompt = buildSystemPrompt({
+			cwd: process.cwd(),
+			customPrompt: body,
+			appendSystemPrompt: tail,
+			skills: [makeSkill("docx", "Create DOCX documents")],
+			contextFiles: [],
+		});
+		expect(prompt.match(/<available_skills>/g)).toHaveLength(1);
 	});
 });

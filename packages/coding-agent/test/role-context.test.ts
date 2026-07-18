@@ -1,7 +1,7 @@
 import { ROLE_DEFINITIONS } from "@piki/event-core";
+import type { Skill } from "@piki/skills";
 import { describe, expect, it } from "vitest";
 import { filterSkillsForRole, filterSkillsWithLens, resolveRoleDef } from "../src/core/role-context.ts";
-import type { Skill } from "../src/core/skills.ts";
 import { createSyntheticSourceInfo } from "../src/core/source-info.ts";
 
 function createTestSkill(name: string, options?: { roles?: string[]; excludeRoles?: string[] }): Skill {
