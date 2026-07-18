@@ -122,15 +122,26 @@ function resolveTitleModel(modelRegistry: ModelRegistry, settingsManager: Settin
 		}
 	}
 
-	// Try known fast models
-	for (const modelId of TITLE_MODEL_CANDIDATES) {
-		const match = available.find((m) => m.provider === "commandcode" && m.id === modelId);
+	// Try known fast models, matched by model ID provider-agnostically
+	for (const candidate of TITLE_MODEL_CANDIDATES) {
+		const [candidateProvider, candidateId] =
+			candidate.split("/").length === 2 ? (candidate.split("/") as [string, string]) : [undefined, candidate];
+		const match = available.find(
+			(m) => candidateId === m.id && (candidateProvider === undefined || candidateProvider === m.provider),
+		);
 		if (match && modelRegistry.hasConfiguredAuth(match)) return match;
 	}
 
-	// Fall back to any commandcode model with auth
-	const providerMatch = available.find((m) => m.provider === "commandcode");
-	if (providerMatch && modelRegistry.hasConfiguredAuth(providerMatch)) return providerMatch;
+	// Fall back to commandcode (matches aux-model.ts), then opencode-go. Do
+	// NOT broaden to "any model with auth": title generation fires-and-forgets
+	// against the user's provider and must not silently consume an arbitrary
+	// provider's rate limit, or in tests a shared faux provider's queued
+	// fixture responses. Users opt into other providers via featureModels.title.
+	const commandcodeMatch = available.find((m) => m.provider === "commandcode" && modelRegistry.hasConfiguredAuth(m));
+	if (commandcodeMatch) return commandcodeMatch;
+
+	const opencodeGoMatch = available.find((m) => m.provider === "opencode-go" && modelRegistry.hasConfiguredAuth(m));
+	if (opencodeGoMatch) return opencodeGoMatch;
 
 	return undefined;
 }
