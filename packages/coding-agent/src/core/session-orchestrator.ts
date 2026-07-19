@@ -526,6 +526,9 @@ export class SessionOrchestrator {
 	private sequence: number;
 	private turnOutcomeCount: number;
 	private lastEventId?: string;
+	/** Id of the most recent `turn_started` event, threaded into `session.agent_ended`
+	 * so the observer role can record `observedTurnId` (alpha22 observerOutcomeToStep). */
+	private lastTurnId?: string;
 	private unsubscribe?: () => void;
 	private readonly eventQueue = Effect.runSync(Queue.bounded<OrchestratorWorkItem>(1024));
 	private readonly eventConsumerFiber: Fiber.Fiber<never, unknown>;
@@ -929,7 +932,7 @@ export class SessionOrchestrator {
 		const observerRole: RoleDefinition<RuntimeEvent> = {
 			name: "observer",
 			match: (event) => event.type === "session.agent_ended" && event.payload.willRetry !== true,
-			run: async ({ projections, signal }) => {
+			run: async ({ event, projections, signal }) => {
 				const overview = projections.get<SessionOverviewProjection>("overview");
 				const transcript = projections.get<TranscriptProjection>("transcript");
 				if (!overview) return;
@@ -940,6 +943,17 @@ export class SessionOrchestrator {
 					justification: pickJustification(heuristic),
 				};
 				const model = resolvePreferredAuxModel(this.services, this.session.model);
+				// alpha22 `observeOnce` generates a unique observerTurnId and threads
+				// the observedTurnId into the observer outcome. We mirror that here,
+				// using `lastTurnId` (now carried on `session.agent_ended`) for
+				// observedTurnId plus a fresh observerTurnId. `reasoningContent`
+				// captures the observer LLM's raw text response (when an LLM ran) so
+				// `observerOutcomeToStep` can surface it as the step's top-level
+				// `reasoning_content` field; it stays undefined on the heuristic-only
+				// path, matching mag (which reads `event.reasoning`).
+				const observedTurnId = (event.payload as { observedTurnId?: string }).observedTurnId;
+				const observerTurnId = randomUUID();
+				let reasoningContent: string | undefined;
 				if (model && assessment.escalate && transcript) {
 					try {
 						const response = await runAuxModelText({
@@ -987,6 +1001,11 @@ export class SessionOrchestrator {
 									: pickJustification(assessment),
 							};
 						}
+						// piki asks the observer LLM for a JSON verdict, so the raw text is the
+						// best available trace of its reasoning; keep it as `reasoningContent`
+						// for the ATIF S8 observer step's top-level `reasoning_content` field
+						// (only emitted when non-empty in atif.ts).
+						reasoningContent = response;
 					} catch {
 						// Keep heuristic assessment
 					}
@@ -1004,6 +1023,12 @@ export class SessionOrchestrator {
 					assessment.escalate,
 					assessment.justification,
 					assessment.escalate ? `<escalation_required>\n${template}\n</escalation_required>` : "pass",
+					{
+						observedTurnId,
+						observerTurnId,
+						chainId: this.session.sessionId,
+					},
+					reasoningContent,
 				);
 				await this.publishRuntimeEvent("observation", {
 					difficulty: assessment.difficulty,
@@ -1442,6 +1467,7 @@ export class SessionOrchestrator {
 				next("session.agent_ended", {
 					willRetry: event.willRetry,
 					stopReason: lastAssistant?.stopReason,
+					observedTurnId: this.lastTurnId,
 				});
 				next("agent_finished", {
 					agentId: this.session.sessionId,
@@ -1451,12 +1477,17 @@ export class SessionOrchestrator {
 				});
 				break;
 			}
-			case "turn_start":
+			case "turn_start": {
+				// Track the just-started turn id so the observer role can record
+				// `observedTurnId` (alpha22 observerOutcomeToStep) when the agent ends.
+				const turnId = randomUUID();
+				this.lastTurnId = turnId;
 				next("turn_started", {
-					turnId: randomUUID(),
+					turnId,
 					chainId: this.session.sessionId,
 				});
 				break;
+			}
 			case "turn_end":
 				this.turnOutcomeCount += 1;
 				next("turn_outcome", {

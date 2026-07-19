@@ -771,6 +771,11 @@ export type AtifAlpha22Step =
 				[key: string]: unknown;
 			};
 			observer?: boolean;
+			/**
+			 * alpha22 `observerOutcomeToStep` surfaces the observer LLM's reasoning
+			 * (when present) as a top-level `reasoning_content` field on the step.
+			 */
+			reasoning_content?: string;
 			llm_call_count: number;
 			extra: Record<string, unknown>;
 	  };
@@ -794,14 +799,17 @@ function entriesToAlpha22Steps(entries: SessionEntry[]): AtifAlpha22Step[] {
 	for (let i = 0; i < entries.length; i++) {
 		const entry = entries[i]!;
 		// S6: non-message event steps (compaction, branch summary, custom,
-		// custom_message, model/thinking change, session info, label) become
-		// alpha22-compatible `source:"system"` steps with their details carried
-		// in `extra`. Observer outcomes have no dedicated piki entry type yet, so
-		// they are intentionally skipped (documented gap).
+		// custom_message, model/thinking change, session info, label, observer,
+		// interrupt) become alpha22-compatible `source:"system"` (or `source:"user"`
+		// for interrupt) steps with their details carried in `extra`. Observer
+		// steps now emit the S8 identity fields (observedTurnId/observerTurnId/
+		// chainId) plus the optional observer LLM reasoning trace
+		// (reasoning_content), mirroring alpha22 observerOutcomeToStep.
 		if (entry.type !== "message") {
 			const source = "system" as const;
 			let message = "";
 			const extra: Record<string, unknown> = { entryType: entry.type };
+			let reasoningContent: string | undefined;
 			let contextManagement:
 				| { type: "compaction"; boundary: "replace"; compactedMessageCount?: number; [key: string]: unknown }
 				| undefined;
@@ -897,15 +905,24 @@ function entriesToAlpha22Steps(entries: SessionEntry[]): AtifAlpha22Step[] {
 					extra.label = entry.label;
 					break;
 				case "observer":
-					// S8: observer assessment step. piki never emits mag-only fields
-					// (reasoning/observedTurnId/observerTurnId/chainId), so we only
-					// surface the signals piki actually carries.
+					// S8: observer assessment step. Mirrors alpha22
+					// `observerOutcomeToStep` (mag:116546): source:system,
+					// message=escalation_required|"Observer assessment: pass",
+					// extra.{observer,escalate,justification,observedTurnId,
+					// observerTurnId,chainId}, and top-level reasoning_content when the
+					// observer LLM left a trace. Identity fields and the optional
+					// reasoning trace are threaded by the orchestrator's observer
+					// role through `appendObserver` (session-orchestrator.ts).
 					message = entry.escalate
 						? `<escalation_required>\n${entry.justification ?? ""}\n</escalation_required>`
 						: "Observer assessment: pass";
 					extra.observer = true;
 					extra.escalate = entry.escalate;
 					if (entry.justification !== undefined) extra.justification = entry.justification;
+					reasoningContent = entry.reasoningContent;
+					if (entry.observedTurnId !== undefined) extra.observedTurnId = entry.observedTurnId;
+					if (entry.observerTurnId !== undefined) extra.observerTurnId = entry.observerTurnId;
+					if (entry.chainId !== undefined) extra.chainId = entry.chainId;
 					break;
 				case "interrupt": {
 					// S8: alpha22 `interruptToStep` emits a `source:"user"` step with
@@ -933,6 +950,13 @@ function entriesToAlpha22Steps(entries: SessionEntry[]): AtifAlpha22Step[] {
 				source,
 				message,
 				...(observation === undefined ? {} : { observation }),
+				// alpha22 `observerOutcomeToStep` surfaces the observer LLM's reasoning
+				// (when present) as a top-level `reasoning_content` field; emit it only
+				// for the observer step and only when non-empty (other system step kinds
+				// never set reasoningContent).
+				...(reasoningContent === undefined || reasoningContent.trim() === ""
+					? {}
+					: { reasoning_content: reasoningContent.trim() }),
 				llm_call_count: 0,
 				extra: {
 					...extra,

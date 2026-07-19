@@ -124,15 +124,26 @@ export interface SessionInfoEntry extends SessionEntryBase {
 
 /**
  * Observer assessment entry emitted by the session orchestrator's observer role.
- * Carries the escalate/justification signals piki actually produces (no mag-only
- * fields like reasoning/observedTurnId/observerTurnId/chainId). Does NOT
- * participate in LLM context.
+ * Carries the escalate/justification signals piki produces plus the ATIF S8
+ * observer-step identity fields (observedTurnId/observerTurnId/chainId) and the
+ * optional observer LLM reasoning trace (reasoningContent), mirroring mag alpha22's
+ * observerOutcomeToStep. Identity fields are threaded from the orchestrator so the
+ * ATIF export can reconstruct the S8 observer step. Does NOT participate in LLM
+ * context (ignored by buildSessionContext).
  */
 export interface ObserverEntry extends SessionEntryBase {
 	type: "observer";
 	escalate: boolean;
 	justification?: string;
 	message: string;
+	/** alpha22 observedTurnId: id of the turn the observer just assessed. */
+	observedTurnId?: string;
+	/** alpha22 observerTurnId: id of this observer run. */
+	observerTurnId?: string;
+	/** alpha22 chainId: the chain (session) id this observer run belongs to. */
+	chainId?: string;
+	/** Optional observer LLM reasoning trace (mirrors alpha22 reasoning_content). */
+	reasoningContent?: string;
 }
 
 /**
@@ -1271,8 +1282,18 @@ export class SessionManager {
 		return entry.id;
 	}
 
-	/** Append an observer assessment entry (emitted by the orchestrator's observer role). Returns entry id. */
-	appendObserver(escalate: boolean, justification: string | undefined, message: string): string {
+	/**
+	 * Append an observer assessment entry (emitted by the orchestrator's observer role).
+	 * The optional ids/reasoningContent mirror mag alpha22's observerOutcomeToStep so
+	 * the ATIF export can reconstruct the S8 observer step. Returns entry id.
+	 */
+	appendObserver(
+		escalate: boolean,
+		justification: string | undefined,
+		message: string,
+		ids?: { observedTurnId?: string; observerTurnId?: string; chainId?: string },
+		reasoningContent?: string,
+	): string {
 		const entry: ObserverEntry = {
 			type: "observer",
 			id: generateId(this.byId),
@@ -1281,6 +1302,10 @@ export class SessionManager {
 			escalate,
 			justification,
 			message,
+			...(ids?.observedTurnId !== undefined ? { observedTurnId: ids.observedTurnId } : {}),
+			...(ids?.observerTurnId !== undefined ? { observerTurnId: ids.observerTurnId } : {}),
+			...(ids?.chainId !== undefined ? { chainId: ids.chainId } : {}),
+			...(reasoningContent !== undefined ? { reasoningContent } : {}),
 		};
 		this._appendEntry(entry);
 		return entry.id;
