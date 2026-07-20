@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { AgentTool } from "@piki/agent-core";
-import type { Skill } from "@piki/skills";
+import type { Skill, SkillSection } from "@piki/skills";
 import { type Static, Type } from "typebox";
 import { stripFrontmatter } from "../../utils/frontmatter.ts";
 import type { ToolDefinition } from "../extensions/types.ts";
@@ -29,7 +29,10 @@ function formatSkillBlock(skill: Skill, body: string): string {
 	const renderedBody =
 		sections.length > 0
 			? sections
-					.map((section) => `## ${section.name[0]!.toUpperCase()}${section.name.slice(1)}\n\n${section.content}`)
+					.map(
+						(section: SkillSection) =>
+							`## ${section.name[0]!.toUpperCase()}${section.name.slice(1)}\n\n${section.content}`,
+					)
 					.join("\n\n")
 			: body;
 	return `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${renderedBody}\n</skill>`;

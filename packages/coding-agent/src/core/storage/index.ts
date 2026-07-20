@@ -11,6 +11,7 @@ export {
 	LogStorageTag,
 	MemoryStorageTag,
 	SCRATCHPAD_SUBDIRS,
+	type ScratchpadSubdir,
 	SessionStorageTag,
 } from "@piki/storage";
 export * from "./auth-storage.ts";

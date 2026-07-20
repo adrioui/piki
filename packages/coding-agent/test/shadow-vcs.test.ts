@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { CommitInfo, DiffFile } from "@piki/vcs";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSnapshot } from "../src/core/snapshot.ts";
@@ -79,16 +80,16 @@ describe("ShadowVcs", () => {
 			);
 
 			expect(result.firstOperation).toMatch(/^\d+-/);
-			expect(result.workingDiff.files.map((file) => file.path).sort()).toEqual(["new.txt", "tracked.txt"]);
+			expect(result.workingDiff.files.map((file: DiffFile) => file.path).sort()).toEqual(["new.txt", "tracked.txt"]);
 			expect(result.workingDiff.additions).toBeGreaterThanOrEqual(2);
 			expect(result.checkpoint.name).toBe("after-change");
-			expect(result.rangedCheckpoints.map((checkpoint) => checkpoint.name)).toEqual(["after-change"]);
+			expect(result.rangedCheckpoints.map((checkpoint: CommitInfo) => checkpoint.name)).toEqual(["after-change"]);
 			expect(result.atCheckpoint).toBe("changed\n");
 			expect(result.restored).toBe("base\n");
 			expect(result.newExistsAfterRestore).toBe(false);
 			expect(result.redone).toBe("changed\n");
 			expect(result.undone).toBe("base\n");
-			expect(result.checkpoints.map((checkpoint) => checkpoint.name)).toEqual(["after-change"]);
+			expect(result.checkpoints.map((checkpoint: CommitInfo) => checkpoint.name)).toEqual(["after-change"]);
 			expect(result.head.commitHash).toMatch(/^[a-f0-9]{40}$/);
 		} finally {
 			await runtime.dispose();

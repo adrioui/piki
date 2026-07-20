@@ -1,4 +1,4 @@
-import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill } from "@piki/skills";
+import { formatSkillsForPrompt, loadSkills, loadSkillsFromDir, type Skill, type SkillSection } from "@piki/skills";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
@@ -456,14 +456,14 @@ describe("skills", () => {
 				});
 				expect(skills).toHaveLength(1);
 				const sections = skills[0].sections ?? [];
-				const names = sections.map((s) => s.name);
+				const names = sections.map((s: SkillSection) => s.name);
 				expect(names).toContain("shared");
 				expect(names).toContain("lead");
 				expect(names).toContain("worker");
 				expect(names).toContain("handoff");
-				const shared = sections.find((s) => s.name === "shared");
+				const shared = sections.find((s: SkillSection) => s.name === "shared");
 				expect(shared?.content).toContain("applies to all roles");
-				const worker = sections.find((s) => s.name === "worker");
+				const worker = sections.find((s: SkillSection) => s.name === "worker");
 				expect(worker?.content).toContain("Worker guidance");
 			});
 
@@ -507,7 +507,7 @@ describe("skills", () => {
 						includeDefaults: false,
 						includeClaudeCodeSkills: true,
 					});
-					expect(skills.some((s) => s.name === "mag-skill")).toBe(true);
+					expect(skills.some((s: Skill) => s.name === "mag-skill")).toBe(true);
 				} finally {
 					require("node:fs").rmSync(tmp, { recursive: true, force: true });
 				}

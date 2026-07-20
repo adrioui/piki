@@ -4,7 +4,7 @@ import { uuidv7 } from "@piki/agent-core";
 import { Context, Data, Effect, Layer } from "effect";
 import { atomicWriteFile } from "./atomic-write.ts";
 import { GlobalStorageTag } from "./global-storage.ts";
-import { type GlobalStoragePaths, SCRATCHPAD_SUBDIRS } from "./paths.ts";
+import { type GlobalStoragePaths, SCRATCHPAD_SUBDIRS, type ScratchpadSubdir } from "./paths.ts";
 import { VersionTag } from "./version.ts";
 
 export interface StoredSessionMeta {
@@ -198,7 +198,7 @@ function makeSessionStorage(paths: GlobalStoragePaths, version: string): Session
 					const scratchpad = paths.sessionScratchpad(sessionId);
 					await mkdir(scratchpad, { recursive: true, mode: 0o700 });
 					await Promise.all(
-						SCRATCHPAD_SUBDIRS.map((subdir) =>
+						SCRATCHPAD_SUBDIRS.map((subdir: ScratchpadSubdir) =>
 							mkdir(paths.sessionScratchpadSubdir(sessionId, subdir), { recursive: true, mode: 0o700 }),
 						),
 					);

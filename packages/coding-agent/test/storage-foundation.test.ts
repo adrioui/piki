@@ -9,6 +9,7 @@ import {
 	LogStorageTag,
 	MemoryStorageTag,
 	SCRATCHPAD_SUBDIRS,
+	type ScratchpadSubdir,
 	SessionStorageTag,
 } from "../src/core/storage/index.ts";
 
@@ -68,7 +69,7 @@ describe("storage foundation", () => {
 						events: yield* sessions.readEvents(sessionId),
 						sessionLogPath: logs.getSessionPath(sessionId),
 						scratchpad,
-						scratchpadSubdirs: SCRATCHPAD_SUBDIRS.map((subdir) =>
+						scratchpadSubdirs: SCRATCHPAD_SUBDIRS.map((subdir: ScratchpadSubdir) =>
 							sessions.paths.sessionScratchpadSubdir(sessionId, subdir),
 						),
 						jobIds: yield* sessions.listPendingMemoryExtractionJobIds,
@@ -85,7 +86,7 @@ describe("storage foundation", () => {
 			expect(existsSync(result.sessionLogPath)).toBe(true);
 			expect(readFileSync(result.sessionLogPath, "utf8")).toContain('"message":"ok"');
 			expect(existsSync(result.scratchpad)).toBe(true);
-			expect(result.scratchpadSubdirs.every((path) => existsSync(path))).toBe(true);
+			expect(result.scratchpadSubdirs.every((path: string) => existsSync(path))).toBe(true);
 			expect(result.jobIds).toEqual([result.runningJob.jobId]);
 			expect(result.runningJob.status).toBe("running");
 			expect(result.runningJob.attempts).toBe(1);
