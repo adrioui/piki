@@ -411,11 +411,36 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			};
 		}
 
-		it("should set prompt_cache_retention for non-api.openai.com baseUrl by default", async () => {
+		it("should omit long cache params for non-api.openai.com baseUrl by default", async () => {
 			let capturedPayload: any = null;
 
 			try {
 				const s = streamOpenAICompletions(createCompletionsModel(), context, {
+					apiKey: "fake-key",
+					cacheRetention: "long",
+					sessionId: "session-completions",
+					onPayload: stopAfterPayload((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Expected to fail
+			}
+
+			expect(capturedPayload).not.toBeNull();
+			expect(capturedPayload.prompt_cache_key).toBeUndefined();
+			expect(capturedPayload.prompt_cache_retention).toBeUndefined();
+		});
+
+		it("should set long cache params for non-api.openai.com when compat opts in", async () => {
+			let capturedPayload: any = null;
+
+			try {
+				const s = streamOpenAICompletions(createCompletionsModel({ supportsLongCacheRetention: true }), context, {
 					apiKey: "fake-key",
 					cacheRetention: "long",
 					sessionId: "session-completions",
